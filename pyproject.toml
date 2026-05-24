@@ -9,6 +9,7 @@ dependencies = []
 [project.optional-dependencies]
 server = [
     "FlagEmbedding @ git+https://github.com/dantetemplar/fork-FlagEmbedding.git@refs/heads/fix/reranker-transformers-v5-tokenizer-compat",
+    "einops>=0.8.0",
     "fastapi>=0.135.2",
     "numpy>=2.3.3",
     "pydantic>=2.11.10",
@@ -23,6 +24,7 @@ client = [
 ]
 all = [
     "FlagEmbedding @ git+https://github.com/dantetemplar/fork-FlagEmbedding.git@refs/heads/fix/reranker-transformers-v5-tokenizer-compat",
+    "einops>=0.8.0",
     "fastapi>=0.135.2",
     "numpy>=2.3.3",
     "pydantic>=2.11.10",

@@ -17,17 +17,17 @@ from fastapi.responses import RedirectResponse
 from fastapi.routing import APIRoute
 from FlagEmbedding import BGEM3FlagModel, FlagReranker
 from pydantic import BaseModel, Field
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import CrossEncoder, SentenceTransformer
 from sentence_transformers.sparse_encoder import SparseEncoder
 
-from meow_embed import __description__, __version__
+from meow_embed._metadata import __description__, __version__
 
 logger = logging.getLogger("uvicorn.error")
 
 
 @dataclass(slots=True)
 class ModelInstanceConfig:
-    type: Literal["dense", "sparse", "reranker", "bgeM3"]
+    type: Literal["dense", "sparse", "reranker", "crossEncoder", "bgeM3"]
     model_id: str
     kwargs: dict[str, Any]
 
@@ -162,7 +162,7 @@ class EmbedResponse(BaseModel):
 
 class ModelsResponse(BaseModel):
     class Model(BaseModel):
-        type: Literal["dense", "sparse", "reranker", "bgeM3"]
+        type: Literal["dense", "sparse", "reranker", "crossEncoder", "bgeM3"]
         id: str
         device: str
         dimensions: int | None
@@ -228,10 +228,16 @@ def default_encode_batch_size(model: Any) -> int:
 
 
 def default_reranker_batch_size(model: Any) -> int | None:
-    # FlagReranker stores inference batch size on the instance (__init__); compute_score
-    # only takes sentence_pairs and **kwargs, so it cannot be read from the method signature.
+    # FlagReranker / CrossEncoder store inference batch size on the instance (__init__);
+    # compute_score / predict only take sentence_pairs and **kwargs.
     batch_size = getattr(model, "batch_size", None)
     return batch_size if isinstance(batch_size, int) else None
+
+
+def rerank_scores(model: Any, pairs: list[list[str]]) -> Any:
+    if isinstance(model, CrossEncoder):
+        return model.predict(pairs, convert_to_numpy=True)
+    return model.compute_score(pairs, normalize=False)
 
 
 def default_bge_batch_size(model: Any) -> int | None:
@@ -430,6 +436,7 @@ def build_app(config: ModelConfig) -> FastAPI:
         app.state.dense_models = {}
         app.state.sparse_models = {}
         app.state.reranker_models = {}
+        app.state.cross_encoder_models = {}
         app.state.bge_m3_models = {}
 
         startup_started_at = time.monotonic()
@@ -447,6 +454,10 @@ def build_app(config: ModelConfig) -> FastAPI:
                 )
             elif model.type == "reranker":
                 app.state.reranker_models[model.model_id] = FlagReranker(
+                    model.model_id, **model.kwargs
+                )
+            elif model.type == "crossEncoder":
+                app.state.cross_encoder_models[model.model_id] = CrossEncoder(
                     model.model_id, **model.kwargs
                 )
             else:
@@ -470,6 +481,7 @@ def build_app(config: ModelConfig) -> FastAPI:
         app.state.dense_models = {}
         app.state.sparse_models = {}
         app.state.reranker_models = {}
+        app.state.cross_encoder_models = {}
         app.state.bge_m3_models = {}
 
     app = FastAPI(
@@ -510,6 +522,16 @@ def build_app(config: ModelConfig) -> FastAPI:
                 )
             )
         for model_id, model in app.state.reranker_models.items():
+            items.append(
+                ModelsResponse.Model(
+                    type="reranker",
+                    id=model_id,
+                    device=model_device(model),
+                    dimensions=None,
+                    batch_size=default_reranker_batch_size(model),
+                )
+            )
+        for model_id, model in app.state.cross_encoder_models.items():
             items.append(
                 ModelsResponse.Model(
                     type="reranker",
@@ -731,7 +753,10 @@ def build_app(config: ModelConfig) -> FastAPI:
             raise HTTPException(status_code=400, detail="Provide non-empty docs.")
 
         model_id = rerank_request.reranker_model_id
-        reranker_model: FlagReranker | None = app.state.reranker_models.get(model_id)
+        reranker_model: FlagReranker | CrossEncoder | None = (
+            app.state.reranker_models.get(model_id)
+            or app.state.cross_encoder_models.get(model_id)
+        )
         if reranker_model is None:
             raise HTTPException(
                 status_code=400, detail=f"Reranker model not loaded: {model_id}"
@@ -748,7 +773,7 @@ def build_app(config: ModelConfig) -> FastAPI:
             )
 
         pairs = [[query, doc] for query in queries for doc in rerank_request.docs]
-        raw_scores = reranker_model.compute_score(pairs, normalize=False)
+        raw_scores = rerank_scores(reranker_model, pairs)
         scores_array = np.asarray(raw_scores, dtype=np.float32).reshape(
             len(queries), len(rerank_request.docs)
         )

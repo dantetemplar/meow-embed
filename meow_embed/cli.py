@@ -16,6 +16,7 @@ def parse_args() -> argparse.Namespace:
             "  meow-embed --SentenceTransformer sergeyzh/BERTA --SparseEncoder opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1 --host 0.0.0.0 --port 8067\n"
             '  meow-embed --SparseEncoder opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1 {"device":"cuda","max_active_dims":256}\n'
             '  meow-embed --FlagReranker BAAI/bge-reranker-v2-m3 {"use_fp16":true}\n'
+            '  meow-embed --CrossEncoder jinaai/jina-reranker-v2-base-multilingual \'{"model_kwargs":{"torch_dtype":"auto"},"trust_remote_code":true}\'\n'
             '  meow-embed --BGEM3FlagModel BAAI/bge-m3 {"use_fp16":true}\n'
         ),
         formatter_class=argparse.RawTextHelpFormatter,
@@ -36,7 +37,13 @@ def parse_args() -> argparse.Namespace:
         "--FlagReranker",
         metavar="MODEL_ID [JSON_KWARGS]",
         action="append",
-        help="Add a reranker model; optional next token can be JSON kwargs for this model.",
+        help="Add a FlagEmbedding reranker model; optional next token can be JSON kwargs for this model.",
+    )
+    parser.add_argument(
+        "--CrossEncoder",
+        metavar="MODEL_ID [JSON_KWARGS]",
+        action="append",
+        help="Add a sentence-transformers CrossEncoder reranker; optional next token can be JSON kwargs for this model.",
     )
     parser.add_argument(
         "--BGEM3FlagModel",
@@ -51,11 +58,21 @@ def parse_args() -> argparse.Namespace:
 def parse_model_specs(
     argv: list[str],
 ) -> tuple[
-    list[tuple[Literal["dense", "sparse", "reranker", "bgeM3"], str, dict[str, Any]]],
+    list[
+        tuple[
+            Literal["dense", "sparse", "reranker", "crossEncoder", "bgeM3"],
+            str,
+            dict[str, Any],
+        ]
+    ],
     list[str],
 ]:
     models: list[
-        tuple[Literal["dense", "sparse", "reranker", "bgeM3"], str, dict[str, Any]]
+        tuple[
+            Literal["dense", "sparse", "reranker", "crossEncoder", "bgeM3"],
+            str,
+            dict[str, Any],
+        ]
     ] = []
     passthrough: list[str] = []
     idx = 0
@@ -65,6 +82,7 @@ def parse_model_specs(
             "--SentenceTransformer",
             "--SparseEncoder",
             "--FlagReranker",
+            "--CrossEncoder",
             "--BGEM3FlagModel",
         ):
             if idx + 1 >= len(argv):
@@ -72,13 +90,17 @@ def parse_model_specs(
             model_id = argv[idx + 1]
             if model_id.startswith("--"):
                 raise SystemExit(f"Missing value for {token}.")
-            model_type: Literal["dense", "sparse", "reranker", "bgeM3"]
+            model_type: Literal[
+                "dense", "sparse", "reranker", "crossEncoder", "bgeM3"
+            ]
             if token == "--SentenceTransformer":
                 model_type = "dense"
             elif token == "--SparseEncoder":
                 model_type = "sparse"
             elif token == "--FlagReranker":
                 model_type = "reranker"
+            elif token == "--CrossEncoder":
+                model_type = "crossEncoder"
             else:
                 model_type = "bgeM3"
             kwargs: dict[str, Any] = {}
@@ -113,7 +135,11 @@ def _has_option(argv: list[str], option: str) -> bool:
 
 def _serialize_model_specs(
     model_specs: list[
-        tuple[Literal["dense", "sparse", "reranker", "bgeM3"], str, dict[str, Any]]
+        tuple[
+            Literal["dense", "sparse", "reranker", "crossEncoder", "bgeM3"],
+            str,
+            dict[str, Any],
+        ]
     ],
 ) -> str:
     return json.dumps(
@@ -140,7 +166,7 @@ def _load_model_config_from_env() -> Any:
         model_type = item.get("type")
         model_id = item.get("model_id")
         kwargs = item.get("kwargs")
-        if model_type not in ("dense", "sparse", "reranker", "bgeM3"):
+        if model_type not in ("dense", "sparse", "reranker", "crossEncoder", "bgeM3"):
             raise RuntimeError(
                 f"Invalid model type in {MODEL_CONFIG_ENV}: {model_type!r}"
             )

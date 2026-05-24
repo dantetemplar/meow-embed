@@ -42,12 +42,13 @@ meow-embed \
   --SparseEncoder "opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1" \
   --BGEM3FlagModel "BAAI/bge-m3" '{"use_fp16": true}' \
   --FlagReranker "BAAI/bge-reranker-v2-m3" '{"use_fp16": true}' \
+  --CrossEncoder "jinaai/jina-reranker-v2-base-multilingual" '{"model_kwargs": {"torch_dtype": "auto"}, "trust_remote_code": true}' \
   --host 0.0.0.0
 ```
 
 ...wait until server is ready (Uvicorn running on http://0.0.0.0:8067)...
 
-`meow-embed` handles only model flags (`--SentenceTransformer`, `--SparseEncoder`, `--FlagReranker`, `--BGEM3FlagModel`).
+`meow-embed` handles only model flags (`--SentenceTransformer`, `--SparseEncoder`, `--FlagReranker`, `--CrossEncoder`, `--BGEM3FlagModel`).
 All other flags are passed directly to Uvicorn CLI parsing.
 
 Defaults (if not provided): `--host 0.0.0.0 --port 8067`.
@@ -202,6 +203,39 @@ print(f"    .colbert: {numpy_info(one.bgeM3.colbert)}")
 #     .colbert: [ndarray] shape=(4, 1024), dtype=float32
 ```
 
+Rerank with FlagReranker (`BAAI/bge-reranker-v2-m3`) or CrossEncoder (`jinaai/jina-reranker-v2-base-multilingual`):
+
+```python
+# one query vs many documents -> scores shape (1, len(docs))
+reranked = meow.rerank(
+    {
+        "reranker_model_id": "BAAI/bge-reranker-v2-m3",
+        "query": "what is panda?",
+        "docs": [
+            "hi",
+            "The giant panda is a bear species endemic to China.",
+        ],
+    }
+)  # NOTE: async version is await meow.arerank(...)
+print(reranked.model_id)
+print(reranked.shape)   # (1, 2)
+print(reranked.scores)  # [[-8.18, 5.21]]
+
+# bulk: many queries vs the same doc list -> scores shape (len(queries), len(docs))
+bulk = meow.rerank(
+    {
+        "reranker_model_id": "jinaai/jina-reranker-v2-base-multilingual",
+        "queries": ["organic skincare", "makeup trends"],
+        "docs": [
+            "Organic skincare for sensitive skin with aloe vera.",
+            "New makeup trends focus on bold colors.",
+        ],
+    }
+)
+print(bulk.shape)   # (2, 2)
+print(bulk.scores)
+```
+
 ### Client-side LMDB cache
 
 Pass an `EmbedCache` instance to enable caching. Embeddings are keyed per text and model options. `EmbedCache.open(path)` opens an LMDB directory (default `~/.cache/meow-embed/client-cache.lmdb`); the optional `map_size=` kwarg sets the map size in bytes (default 2 GiB). For full control over the LMDB environment, construct `EmbedCache(env=lmdb.open(...))` directly.
@@ -345,6 +379,7 @@ meow-embed \
   --SparseEncoder "opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1" \
   --BGEM3FlagModel "BAAI/bge-m3" '{"use_fp16": true}' \
   --FlagReranker "BAAI/bge-reranker-v2-m3" '{"use_fp16": true}' \
+  --CrossEncoder "jinaai/jina-reranker-v2-base-multilingual" '{"model_kwargs": {"torch_dtype": "auto"}, "trust_remote_code": true}' \
   --host 0.0.0.0
 ```
 

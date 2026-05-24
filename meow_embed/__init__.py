@@ -1,12 +1,12 @@
 """meow-embed package."""
 
-from importlib.metadata import metadata, version
+from typing import TYPE_CHECKING
 
-from meow_embed.cache import EmbedCache, EmbedCacheProgress
-from meow_embed.client import MeowEmbedClient
+from meow_embed._metadata import __description__, __version__
 
-__version__ = version("meow-embed")
-__description__ = metadata("meow-embed")["Summary"]
+if TYPE_CHECKING:
+    from meow_embed.cache import EmbedCache, EmbedCacheProgress
+    from meow_embed.client import MeowEmbedClient
 
 __all__ = [
     "EmbedCache",
@@ -15,3 +15,19 @@ __all__ = [
     "__description__",
     "__version__",
 ]
+
+
+def __getattr__(name: str) -> object:
+    if name == "MeowEmbedClient":
+        from meow_embed.client import MeowEmbedClient
+
+        return MeowEmbedClient
+    if name == "EmbedCache":
+        from meow_embed.cache import EmbedCache
+
+        return EmbedCache
+    if name == "EmbedCacheProgress":
+        from meow_embed.cache import EmbedCacheProgress
+
+        return EmbedCacheProgress
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
