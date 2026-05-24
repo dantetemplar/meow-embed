@@ -15,3 +15,13 @@ def test_rerank_request_dict_activation_fn() -> None:
         "activation_fn": "identity",
     }
     assert_type(payload["activation_fn"], RerankActivationFn | None)
+
+
+def test_rerank_request_dict_prompt() -> None:
+    payload: RerankRequestDict = {
+        "reranker_model_id": "Qwen/Qwen3-Reranker-0.6B",
+        "query": "ноутбук",
+        "docs": ["ноутбук Lenovo", "зарядка для ноутбука"],
+        "prompt": "Определи релевантность названия товара запросу.",
+    }
+    assert_type(payload["prompt"], str | None)

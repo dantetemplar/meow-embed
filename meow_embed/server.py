@@ -68,6 +68,20 @@ class RerankRequest(BaseModel):
     query: str | None = None
     queries: list[str] | None = None
     docs: list[str]
+    prompt: str | None = Field(
+        default=None,
+        description=(
+            "CrossEncoder only: instruction text passed to predict(prompt=...). "
+            "Overrides the model default prompt for this request."
+        ),
+    )
+    prompt_name: str | None = Field(
+        default=None,
+        description=(
+            "CrossEncoder only: named prompt from the model prompts=... loaded at startup. "
+            "Ignored when prompt is set."
+        ),
+    )
     activation_fn: Literal["default", "identity", "sigmoid"] | None = Field(
         default=None,
         description=(
@@ -270,17 +284,42 @@ def resolve_rerank_activation_fn(
     raise ValueError(f"Unsupported activation_fn: {activation_fn!r}")
 
 
+def validate_rerank_prompt_args(
+    *,
+    is_cross_encoder: bool,
+    prompt: str | None,
+    prompt_name: str | None,
+) -> None:
+    if prompt is not None and prompt_name is not None:
+        raise ValueError("Provide either prompt or prompt_name, not both.")
+    if (prompt is not None or prompt_name is not None) and not is_cross_encoder:
+        raise ValueError(
+            "prompt and prompt_name are only supported for CrossEncoder rerankers."
+        )
+
+
 def rerank_scores(
     model: Any,
     pairs: list[list[str]],
     *,
     activation_fn: Literal["default", "identity", "sigmoid"] | None = None,
+    prompt: str | None = None,
+    prompt_name: str | None = None,
 ) -> Any:
+    validate_rerank_prompt_args(
+        is_cross_encoder=isinstance(model, CrossEncoder),
+        prompt=prompt,
+        prompt_name=prompt_name,
+    )
     resolved = resolve_rerank_activation_fn(activation_fn)
     if isinstance(model, CrossEncoder):
         predict_kwargs: dict[str, Any] = {"convert_to_numpy": True}
         if resolved is not None:
             predict_kwargs["activation_fn"] = resolved
+        if prompt is not None:
+            predict_kwargs["prompt"] = prompt
+        if prompt_name is not None:
+            predict_kwargs["prompt_name"] = prompt_name
         return model.predict(pairs, **predict_kwargs)
     normalize = resolved is not None and isinstance(resolved, torch.nn.Sigmoid)
     return model.compute_score(pairs, normalize=normalize)
@@ -819,9 +858,22 @@ def build_app(config: ModelConfig) -> FastAPI:
                 status_code=400, detail="Provide non-empty query or queries."
             )
 
+        try:
+            validate_rerank_prompt_args(
+                is_cross_encoder=isinstance(reranker_model, CrossEncoder),
+                prompt=rerank_request.prompt,
+                prompt_name=rerank_request.prompt_name,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
         pairs = [[query, doc] for query in queries for doc in rerank_request.docs]
         raw_scores = rerank_scores(
-            reranker_model, pairs, activation_fn=rerank_request.activation_fn
+            reranker_model,
+            pairs,
+            activation_fn=rerank_request.activation_fn,
+            prompt=rerank_request.prompt,
+            prompt_name=rerank_request.prompt_name,
         )
         scores_array = np.asarray(raw_scores, dtype=np.float32).reshape(
             len(queries), len(rerank_request.docs)

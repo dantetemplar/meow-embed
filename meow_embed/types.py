@@ -146,6 +146,8 @@ class RerankRequestDict(TypedDict):
     docs: ReadOnly[Sequence[str]]
     query: ReadOnly[NotRequired[str | None]]
     queries: ReadOnly[NotRequired[Sequence[str] | None]]
+    prompt: ReadOnly[NotRequired[str | None]]
+    prompt_name: ReadOnly[NotRequired[str | None]]
     activation_fn: ReadOnly[NotRequired[RerankActivationFn | None]]
 
 
