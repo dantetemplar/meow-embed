@@ -227,6 +227,22 @@ def default_encode_batch_size(model: Any) -> int:
     return default
 
 
+def _ensure_xlm_roberta_create_position_ids_compat() -> None:
+    """Jina CrossEncoder remote code imports a module-level helper removed in transformers v5."""
+    import transformers.models.xlm_roberta.modeling_xlm_roberta as modeling
+
+    if hasattr(modeling, "create_position_ids_from_input_ids"):
+        return
+    embeddings_cls = modeling.XLMRobertaEmbeddings
+    fn = getattr(embeddings_cls, "create_position_ids_from_input_ids", None)
+    if fn is None:
+        raise RuntimeError(
+            "transformers XLMRobertaEmbeddings has no create_position_ids_from_input_ids; "
+            "cannot load Jina-style CrossEncoder models."
+        )
+    modeling.create_position_ids_from_input_ids = fn
+
+
 def default_reranker_batch_size(model: Any) -> int | None:
     # FlagReranker / CrossEncoder store inference batch size on the instance (__init__);
     # compute_score / predict only take sentence_pairs and **kwargs.
@@ -457,6 +473,7 @@ def build_app(config: ModelConfig) -> FastAPI:
                     model.model_id, **model.kwargs
                 )
             elif model.type == "crossEncoder":
+                _ensure_xlm_roberta_create_position_ids_compat()
                 app.state.cross_encoder_models[model.model_id] = CrossEncoder(
                     model.model_id, **model.kwargs
                 )
