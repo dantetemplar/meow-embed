@@ -252,11 +252,7 @@ def default_reranker_batch_size(model: Any) -> int | None:
 
 def rerank_scores(model: Any, pairs: list[list[str]]) -> Any:
     if isinstance(model, CrossEncoder):
-        return model.predict(
-            pairs,
-            convert_to_numpy=True,
-            activation_fn=torch.nn.Identity(),
-        )
+        return model.predict(pairs, convert_to_numpy=True)
     return model.compute_score(pairs, normalize=False)
 
 
