@@ -68,6 +68,14 @@ class RerankRequest(BaseModel):
     query: str | None = None
     queries: list[str] | None = None
     docs: list[str]
+    activation_fn: Literal["default", "identity", "sigmoid"] | None = Field(
+        default=None,
+        description=(
+            'Override score activation: "default" uses the model default; '
+            '"identity" returns raw logits (CrossEncoder) or normalize=False (FlagReranker); '
+            '"sigmoid" forces sigmoid on CrossEncoder or normalize=True on FlagReranker.'
+        ),
+    )
 
 
 @dataclass
@@ -250,10 +258,32 @@ def default_reranker_batch_size(model: Any) -> int | None:
     return batch_size if isinstance(batch_size, int) else None
 
 
-def rerank_scores(model: Any, pairs: list[list[str]]) -> Any:
+def resolve_rerank_activation_fn(
+    activation_fn: Literal["default", "identity", "sigmoid"] | None,
+) -> Callable[[Any], Any] | Literal["default"] | None:
+    if activation_fn is None or activation_fn == "default":
+        return None
+    if activation_fn == "identity":
+        return torch.nn.Identity()
+    if activation_fn == "sigmoid":
+        return torch.nn.Sigmoid()
+    raise ValueError(f"Unsupported activation_fn: {activation_fn!r}")
+
+
+def rerank_scores(
+    model: Any,
+    pairs: list[list[str]],
+    *,
+    activation_fn: Literal["default", "identity", "sigmoid"] | None = None,
+) -> Any:
+    resolved = resolve_rerank_activation_fn(activation_fn)
     if isinstance(model, CrossEncoder):
-        return model.predict(pairs, convert_to_numpy=True)
-    return model.compute_score(pairs, normalize=False)
+        predict_kwargs: dict[str, Any] = {"convert_to_numpy": True}
+        if resolved is not None:
+            predict_kwargs["activation_fn"] = resolved
+        return model.predict(pairs, **predict_kwargs)
+    normalize = resolved is not None and isinstance(resolved, torch.nn.Sigmoid)
+    return model.compute_score(pairs, normalize=normalize)
 
 
 def default_bge_batch_size(model: Any) -> int | None:
@@ -790,7 +820,9 @@ def build_app(config: ModelConfig) -> FastAPI:
             )
 
         pairs = [[query, doc] for query in queries for doc in rerank_request.docs]
-        raw_scores = rerank_scores(reranker_model, pairs)
+        raw_scores = rerank_scores(
+            reranker_model, pairs, activation_fn=rerank_request.activation_fn
+        )
         scores_array = np.asarray(raw_scores, dtype=np.float32).reshape(
             len(queries), len(rerank_request.docs)
         )

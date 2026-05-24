@@ -215,6 +215,7 @@ reranked = meow.rerank(
             "hi",
             "The giant panda is a bear species endemic to China.",
         ],
+        "activation_fn": "identity",  # raw logits; "sigmoid" = 0..1; omit = model default
     }
 )  # NOTE: async version is await meow.arerank(...)
 print(reranked.model_id)

@@ -10,6 +10,7 @@ from typing_extensions import ReadOnly
 type Float32Array = npt.NDArray[np.float32]
 type Float16Array = npt.NDArray[np.float16]
 type UInt32Array = npt.NDArray[np.uint32]
+type RerankActivationFn = Literal["default", "identity", "sigmoid"]
 
 
 class EmbedRequestCommonDict(TypedDict):
@@ -145,6 +146,7 @@ class RerankRequestDict(TypedDict):
     docs: ReadOnly[Sequence[str]]
     query: ReadOnly[NotRequired[str | None]]
     queries: ReadOnly[NotRequired[Sequence[str] | None]]
+    activation_fn: ReadOnly[NotRequired[RerankActivationFn | None]]
 
 
 class DenseResponseDict(TypedDict):
