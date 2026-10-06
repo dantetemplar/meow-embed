@@ -1,9 +1,9 @@
 # meow-embed
-> FastAPI embedding server and Python client for dense and sparse text embeddings
+> FastAPI embedding server and Python client for multimodal dense and sparse text embeddings
 
 ## What is it?
 
-`meow-embed` is an HTTP API for text embeddings.
+`meow-embed` is an HTTP API for text and multimodal embeddings.
 
 It can return **dense + sparse + BGE-M3 (dense, sparse, colbert) in one request**, with efficient transport:
 - vectors are encoded as `base64`
@@ -237,9 +237,60 @@ print(bulk.shape)   # (2, 2)
 print(bulk.scores)
 ```
 
+### Multimodal dense embeddings
+
+Load a model supporting text, images, video, and audio:
+
+```bash
+meow-embed \
+  --SentenceTransformer "google/embeddinggemma-2" '{"model_kwargs": {"torch_dtype": "bfloat16"}}'
+```
+
+Use `torch_dtype="bfloat16"` or `"float32"`, never `"float16"` for this model. The server/all extras include `transformers>=5.19.0` with `embedding_gemma2` support and the required image, audio, and video decoders.
+
+The existing APIs accept multimodal inputs without new methods:
+- `embed` / `aembed`: payload `texts: Sequence[str | MultimodalInputDict]`; strings and dictionaries can share a batch.
+- `embed_one` / `aembed_one`: payload `text: str | MultimodalInputDict`.
+- `MultimodalInputDict` has optional `text: str` and `image`, `video`, `audio` fields. Each media field accepts a single item or a list of local filename strings, `pathlib.Path`, `bytes`, or `MediaDataDict` descriptors (`{"data": "<base64 string>", "filename": "optional-name.jpg"}`). Text is optional, so media-only inputs are supported.
+
+Interleave media with text using placeholders; each placeholder consumes the next item in its corresponding media list:
+
+```python
+one = meow.embed_one(
+    {
+        "dense_model_id": "google/embeddinggemma-2",
+        "text": {
+            "text": "Waterproof shoes. <|image|> Mesh: <|image|> Grip test: <|video|> Sound: <|audio|>",
+            "image": ["shoe.jpg", "mesh.jpg"],
+            "video": "demo.mp4",
+            "audio": "demo.wav",
+        },
+    }
+)  # Async: await meow.aembed_one(...)
+
+batch = meow.embed(
+    {
+        "dense_model_id": "google/embeddinggemma-2",
+        "texts": [
+            "Waterproof hiking shoes",
+            {"text": "Waterproof shoes. <|image|>", "image": "shoe.jpg"},
+            {"image": "mesh.jpg"},  # Media-only input
+        ],
+    }
+)  # Async: await meow.aembed(...)
+
+image_only = meow.embed_one(
+    {"dense_model_id": "google/embeddinggemma-2", "text": {"image": "shoe.jpg"}}
+)
+```
+
+The client reads local files and automatically uploads their bytes as base64 descriptors; the server accepts only these descriptors, never arbitrary filesystem paths or URLs. Sync and async clients use the same payloads. Dictionaries are **dense-only**: sparse and BGE-M3 requests reject them, including in mixed batches.
+
+EmbeddingGemma 2 shares an **8192-token context** across text and all media. Audio defaults to mono at 16 kHz; video defaults to 1 fps. Cache keys incorporate media bytes and their order, not just filenames, so changed content or interleaving cannot reuse stale embeddings.
+
 ### Client-side LMDB cache
 
-Pass an `EmbedCache` instance to enable caching. Embeddings are keyed per text and model options. `EmbedCache.open(path)` opens an LMDB directory (default `~/.cache/meow-embed/client-cache.lmdb`); the optional `map_size=` kwarg sets the map size in bytes (default 2 GiB). For full control over the LMDB environment, construct `EmbedCache(env=lmdb.open(...))` directly.
+Pass an `EmbedCache` instance to enable caching. Embeddings are keyed per input (including media bytes and order) and model options. `EmbedCache.open(path)` opens an LMDB directory (default `~/.cache/meow-embed/client-cache.lmdb`); the optional `map_size=` kwarg sets the map size in bytes (default 2 GiB). For full control over the LMDB environment, construct `EmbedCache(env=lmdb.open(...))` directly.
 
 Quick default-path convenience:
 

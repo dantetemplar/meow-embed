@@ -1,7 +1,7 @@
 [project]
 name = "meow-embed"
 version = "0.1.2"
-description = "FastAPI embedding server and async Python client for dense and sparse text embeddings."
+description = "FastAPI embedding server and async Python client for multimodal dense and sparse text embeddings."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = []
@@ -13,8 +13,12 @@ server = [
     "fastapi>=0.142.2",
     "numpy>=2.5.3",
     "pydantic>=2.13.5",
-    "sentence-transformers>=6.1.0",
+    "sentence-transformers[image]>=6.1.0",
+    "av>=19.0.1",
+    "librosa>=1.0.0",
+    "torchvision>=0.29.1",
     "torch>=2.14.0",
+    "transformers>=5.19.0",
     "uvicorn>=0.54.0",
 ]
 client = [
@@ -28,8 +32,12 @@ all = [
     "fastapi>=0.142.2",
     "numpy>=2.5.3",
     "pydantic>=2.13.5",
-    "sentence-transformers>=6.1.0",
+    "sentence-transformers[image]>=6.1.0",
+    "av>=19.0.1",
+    "librosa>=1.0.0",
+    "torchvision>=0.29.1",
     "torch>=2.14.0",
+    "transformers>=5.19.0",
     "uvicorn>=0.54.0",
     "httpx>=0.28.1",
     "lmdb>=3.0.0",

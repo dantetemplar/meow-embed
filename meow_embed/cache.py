@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import struct
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from typing import Any, Callable, Literal, Sequence, cast
 import lmdb
 import numpy as np
 
+from meow_embed.media import normalize_embed_payload
 from meow_embed.parsing import (
     all_present,
     assemble_parsed_response,
@@ -18,6 +20,7 @@ from meow_embed.parsing import (
 from meow_embed.types import (
     BGEM3Embeddings,
     DenseEmbeddings,
+    EmbedInput,
     EmbedRequestPayload,
     Float32Array,
     ParsedEmbedResponseBGEM3,
@@ -349,7 +352,7 @@ class _StreamSlot:
 @dataclass(slots=True)
 class EmbedCacheProgress:
     payload: EmbedRequestPayload
-    texts: list[str]
+    texts: list[EmbedInput]
     misses: list[int]
     streams: list[_StreamSlot]
 
@@ -461,14 +464,24 @@ class EmbedCache:
             return
 
     def prepare(self, payload: EmbedRequestPayload) -> EmbedCacheProgress:
+        payload = normalize_embed_payload(payload)
         texts = list(payload.get("texts", []))
         handlers = _build_handlers(payload)
+        key_inputs = [
+            item
+            if isinstance(item, str)
+            else "multimodal:" + json.dumps(item, sort_keys=True, separators=(",", ":"))
+            for item in texts
+        ]
 
         streams: list[_StreamSlot] = []
         miss_set: set[int] = set()
 
         for handler in handlers:
-            keys = handler.make_keys(texts)
+            keys = handler.make_keys(key_inputs)
+            for idx, item in enumerate(texts):
+                if isinstance(item, dict):
+                    keys[idx] = _hash_chunks(b"multimodal", keys[idx])
             raw_values = self._load(keys)
             items: list[Any] = [handler.codec.decode(raw) for raw in raw_values]
             for idx, item in enumerate(items):

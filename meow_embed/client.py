@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import gzip
 import json
 import time
@@ -12,6 +13,7 @@ import numpy as np
 import meow_embed.types as t
 from meow_embed.cache import EmbedCache, EmbedCacheProgress
 from meow_embed.parsing import decode_embed_response
+from meow_embed.media import normalize_embed_payload
 
 timing_timeline = ContextVar[dict[str, float] | None]("timing_timeline", default=None)
 
@@ -155,6 +157,7 @@ class MeowEmbedClient:
     ) -> t.ParsedEmbedResponseVariant:
         timeline_token = timing_timeline.set({})
         try:
+            payload = normalize_embed_payload(payload)
             self._validate_embed_payload(payload)
             self._append_timeline_timestamp("payload_validate_ms")
 
@@ -285,6 +288,7 @@ class MeowEmbedClient:
     ) -> t.ParsedEmbedResponseVariant:
         timeline_token = timing_timeline.set({})
         try:
+            payload = await asyncio.to_thread(normalize_embed_payload, payload)
             self._validate_embed_payload(payload)
             self._append_timeline_timestamp("payload_validate_ms")
 

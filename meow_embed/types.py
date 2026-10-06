@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal, NotRequired, Required, Sequence, TypedDict
 
 import numpy as np
@@ -13,8 +14,27 @@ type UInt32Array = npt.NDArray[np.uint32]
 type RerankActivationFn = Literal["default", "identity", "sigmoid"]
 
 
+class MediaDataDict(TypedDict):
+    data: ReadOnly[str]
+    filename: ReadOnly[NotRequired[str]]
+
+
+type MediaInput = str | Path | bytes | MediaDataDict
+type MediaInputs = MediaInput | Sequence[MediaInput]
+
+
+class MultimodalInputDict(TypedDict, total=False):
+    text: ReadOnly[str]
+    image: ReadOnly[MediaInputs]
+    video: ReadOnly[MediaInputs]
+    audio: ReadOnly[MediaInputs]
+
+
+type EmbedInput = str | MultimodalInputDict
+
+
 class EmbedRequestCommonDict(TypedDict):
-    texts: ReadOnly[Sequence[str]]
+    texts: ReadOnly[Sequence[EmbedInput]]
     dense_truncate_dim: ReadOnly[NotRequired[int | None]]
     dense_prompt: ReadOnly[NotRequired[str]]
     dense_task: ReadOnly[NotRequired[Literal["query", "document"] | None]]
@@ -77,7 +97,7 @@ EmbedRequestPayload = (
 
 
 class EmbedOneRequestCommonDict(TypedDict):
-    text: ReadOnly[Required[str]]
+    text: ReadOnly[Required[EmbedInput]]
 
     dense_truncate_dim: ReadOnly[NotRequired[int | None]]
     dense_prompt: ReadOnly[NotRequired[str]]

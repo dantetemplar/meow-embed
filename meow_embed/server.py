@@ -1,4 +1,5 @@
 import base64
+import binascii
 import gzip
 import inspect
 import json
@@ -8,19 +9,27 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Annotated, Any, Literal
+from io import BytesIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import Annotated, Any, Literal, cast
 
+from av.error import FFmpegError
 import numpy as np
 import torch
 from fastapi import Body, FastAPI, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from fastapi.routing import APIRoute
 from FlagEmbedding import BGEM3FlagModel, FlagReranker
-from pydantic import BaseModel, Field
+from PIL import Image, UnidentifiedImageError
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from transformers.audio_utils import load_audio
+from transformers.video_utils import load_video
 from sentence_transformers import CrossEncoder, SentenceTransformer
 from sentence_transformers.sparse_encoder import SparseEncoder
 
 from meow_embed._metadata import __description__, __version__
+from meow_embed.media import MEDIA_MODALITIES, validate_multimodal_input
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -35,6 +44,39 @@ class ModelInstanceConfig:
 @dataclass(slots=True)
 class ModelConfig:
     models: list[ModelInstanceConfig]
+
+
+class MediaData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    data: str
+    filename: str = ""
+
+    def decode(self) -> bytes:
+        try:
+            return base64.b64decode(self.data, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise ValueError("Invalid base64 media data.") from exc
+
+
+class MultimodalInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str | None = None
+    image: MediaData | list[MediaData] | None = None
+    video: MediaData | list[MediaData] | None = None
+    audio: MediaData | list[MediaData] | None = None
+
+    @model_validator(mode="after")
+    def validate_input(self) -> "MultimodalInput":
+        validate_multimodal_input(self.model_dump(exclude_none=True))
+        for modality in MEDIA_MODALITIES:
+            value = getattr(self, modality)
+            for media in (
+                value if isinstance(value, list) else ([] if value is None else [value])
+            ):
+                media.decode()
+        return self
 
 
 class EmbedRequest(BaseModel):
@@ -57,7 +99,20 @@ class EmbedRequest(BaseModel):
         description='SparseEncoder route: "query" or "document" (encode_query / encode_document); omit for encode().',
     )
 
-    texts: list[str]
+    texts: list[str | MultimodalInput] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_models(self) -> "EmbedRequest":
+        if any(isinstance(item, MultimodalInput) for item in self.texts):
+            if (
+                self.dense_model_id is None
+                or self.sparse_model_id is not None
+                or self.bge_model_id is not None
+            ):
+                raise ValueError(
+                    "Multimodal dictionaries require a dense model only; sparse and BGE-M3 accept text strings."
+                )
+        return self
 
     def __repr__(self) -> str:
         return f"EmbedRequest(dense_model_id={self.dense_model_id}, dense_truncate_dim={self.dense_truncate_dim}, dense_prompt={self.dense_prompt!r}, dense_task={self.dense_task}, sparse_model_id={self.sparse_model_id}, sparse_max_active_dims={self.sparse_max_active_dims}, sparse_pruning_ratio={self.sparse_pruning_ratio}, bge_model_id={self.bge_model_id}, sparse_task={self.sparse_task}, texts={len(self.texts)})"
@@ -262,7 +317,7 @@ def _ensure_xlm_roberta_create_position_ids_compat() -> None:
             "transformers XLMRobertaEmbeddings has no create_position_ids_from_input_ids; "
             "cannot load Jina-style CrossEncoder models."
         )
-    modeling.create_position_ids_from_input_ids = fn
+    setattr(modeling, "create_position_ids_from_input_ids", fn)
 
 
 def default_reranker_batch_size(model: Any) -> int | None:
@@ -468,6 +523,90 @@ def serialize_bge_colbert_embeddings(
             )
         )
     return items
+
+
+def encode_dense_inputs(
+    model: SentenceTransformer,
+    request: EmbedRequest,
+) -> np.ndarray:
+    """Keep compatible modalities in a batch without requiring a chat template."""
+    with TemporaryDirectory(prefix="meow-embed-") as directory:
+        groups: dict[tuple[str, ...], list[tuple[int, Any]]] = {}
+        for index, item in enumerate(request.texts):
+            if isinstance(item, str):
+                groups.setdefault(("text",), []).append((index, item))
+                continue
+            decoded: dict[str, Any] = {}
+            if item.text:
+                decoded["text"] = request.dense_prompt + item.text
+            for modality in MEDIA_MODALITIES:
+                value = getattr(item, modality)
+                if value is None:
+                    continue
+                media_items = value if isinstance(value, list) else [value]
+                values = []
+                for media_index, media in enumerate(media_items):
+                    raw = media.decode()
+                    if modality == "image":
+                        try:
+                            with Image.open(BytesIO(raw)) as image:
+                                values.append(image.convert("RGB"))
+                        except (UnidentifiedImageError, OSError, ValueError) as exc:
+                            raise ValueError("Invalid image media.") from exc
+                    else:
+                        suffix = Path(media.filename).suffix
+                        path = (
+                            Path(directory)
+                            / f"{index}-{modality}-{media_index}{suffix}"
+                        )
+                        path.write_bytes(raw)
+                        if modality == "audio":
+                            try:
+                                waveform = load_audio(
+                                    str(path), sampling_rate=16000, backend="librosa"
+                                )
+                            except (OSError, RuntimeError, ValueError) as exc:
+                                raise ValueError("Invalid audio media.") from exc
+                            values.append({"array": waveform, "sampling_rate": 16000})
+                        else:
+                            try:
+                                frames, metadata = load_video(
+                                    cast(Any, str(path)), backend="pyav"
+                                )
+                            except (
+                                OSError,
+                                ValueError,
+                                IndexError,
+                                FFmpegError,
+                            ) as exc:
+                                raise ValueError("Invalid video media.") from exc
+                            values.append({"array": frames, "video_metadata": metadata})
+                decoded[modality] = values
+            key = tuple(sorted(decoded))
+            groups.setdefault(("dict", *key), []).append((index, decoded))
+
+        encode = {
+            "query": model.encode_query,
+            "document": model.encode_document,
+            None: model.encode,
+        }[request.dense_task]
+        rows: list[Any] = [None] * len(request.texts)
+        for group in groups.values():
+            inputs = [item for _, item in group]
+            vectors = np.asarray(
+                encode(
+                    inputs,
+                    truncate_dim=request.dense_truncate_dim,
+                    prompt=request.dense_prompt if isinstance(inputs[0], str) else "",
+                    convert_to_numpy=True,
+                ),
+                dtype=np.float32,
+            )
+            if vectors.ndim == 1:
+                vectors = vectors[None, :]
+            for (index, _), vector in zip(group, vectors, strict=True):
+                rows[index] = vector
+        return np.stack(rows)
 
 
 def build_app(config: ModelConfig) -> FastAPI:
@@ -683,27 +822,10 @@ def build_app(config: ModelConfig) -> FastAPI:
                     detail=f"Dense model not loaded: {embed_request.dense_model_id}",
                 )
             timing_context.get().route_dense_embed_start = time.monotonic()
-            if embed_request.dense_task == "query":
-                dense_vectors = dense_model.encode_query(
-                    embed_request.texts,
-                    truncate_dim=embed_request.dense_truncate_dim,
-                    prompt=embed_request.dense_prompt,
-                    convert_to_numpy=True,
-                )
-            elif embed_request.dense_task == "document":
-                dense_vectors = dense_model.encode_document(
-                    embed_request.texts,
-                    truncate_dim=embed_request.dense_truncate_dim,
-                    prompt=embed_request.dense_prompt,
-                    convert_to_numpy=True,
-                )
-            else:
-                dense_vectors = dense_model.encode(
-                    embed_request.texts,
-                    truncate_dim=embed_request.dense_truncate_dim,
-                    prompt=embed_request.dense_prompt,
-                    convert_to_numpy=True,
-                )
+            try:
+                dense_vectors = encode_dense_inputs(dense_model, embed_request)
+            except (ValueError, OSError, FFmpegError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             timing_context.get().route_dense_embed_end = time.monotonic()
             dense_vectors = np.asarray(dense_vectors, dtype=np.float32)
             if dense_vectors.ndim == 1:
@@ -727,22 +849,25 @@ def build_app(config: ModelConfig) -> FastAPI:
                     status_code=400,
                     detail=f"Sparse model not loaded: {embed_request.sparse_model_id}",
                 )
+            text_inputs = [
+                item for item in embed_request.texts if isinstance(item, str)
+            ]
             timing_context.get().route_sparse_embed_start = time.monotonic()
             if embed_request.sparse_task == "query":
                 sparse_vectors = sparse_model.encode_query(
-                    embed_request.texts,
+                    text_inputs,
                     max_active_dims=embed_request.sparse_max_active_dims,
                     convert_to_tensor=True,
                 )
             elif embed_request.sparse_task == "document":
                 sparse_vectors = sparse_model.encode_document(
-                    embed_request.texts,
+                    text_inputs,
                     max_active_dims=embed_request.sparse_max_active_dims,
                     convert_to_tensor=True,
                 )
             else:
                 sparse_vectors = sparse_model.encode(
-                    embed_request.texts,
+                    text_inputs,
                     max_active_dims=embed_request.sparse_max_active_dims,
                     convert_to_tensor=True,
                 )
@@ -773,7 +898,7 @@ def build_app(config: ModelConfig) -> FastAPI:
                 )
             timing_context.get().route_bge_embed_start = time.monotonic()
             bge_vectors = bge_model.encode(
-                embed_request.texts,
+                [item for item in embed_request.texts if isinstance(item, str)],
                 return_dense=True,
                 return_sparse=True,
                 return_colbert_vecs=True,
@@ -784,7 +909,7 @@ def build_app(config: ModelConfig) -> FastAPI:
             if dense_vectors.ndim == 1:
                 dense_vectors = np.expand_dims(dense_vectors, axis=0)
             sparse_items = serialize_bge_lexical_weights(
-                bge_vectors["lexical_weights"],
+                cast(list[dict[str, float]], bge_vectors["lexical_weights"]),
                 dim=int(bge_sparse_dimensions(bge_model) or 0),
             )
             colbert_items = serialize_bge_colbert_embeddings(
