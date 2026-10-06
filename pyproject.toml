@@ -8,31 +8,31 @@ dependencies = []
 
 [project.optional-dependencies]
 server = [
-    "FlagEmbedding @ git+https://github.com/dantetemplar/fork-FlagEmbedding.git@refs/heads/fix/reranker-transformers-v5-tokenizer-compat",
-    "einops>=0.8.0",
-    "fastapi>=0.135.2",
-    "numpy>=2.3.3",
-    "pydantic>=2.11.10",
-    "sentence-transformers>=5.3.0",
-    "torch>=2.2.0",
-    "uvicorn>=0.42.0",
+    "FlagEmbedding>=1.4.2",
+    "einops>=0.8.2",
+    "fastapi>=0.142.2",
+    "numpy>=2.5.3",
+    "pydantic>=2.13.5",
+    "sentence-transformers>=6.1.0",
+    "torch>=2.14.0",
+    "uvicorn>=0.54.0",
 ]
 client = [
-    "httpx",
-    "lmdb",
-    "numpy",
+    "httpx>=0.28.1",
+    "lmdb>=3.0.0",
+    "numpy>=2.5.3",
 ]
 all = [
-    "FlagEmbedding @ git+https://github.com/dantetemplar/fork-FlagEmbedding.git@refs/heads/fix/reranker-transformers-v5-tokenizer-compat",
-    "einops>=0.8.0",
-    "fastapi>=0.135.2",
-    "numpy>=2.3.3",
-    "pydantic>=2.11.10",
-    "sentence-transformers>=5.3.0",
-    "torch>=2.2.0",
-    "uvicorn>=0.42.0",
+    "FlagEmbedding>=1.4.2",
+    "einops>=0.8.2",
+    "fastapi>=0.142.2",
+    "numpy>=2.5.3",
+    "pydantic>=2.13.5",
+    "sentence-transformers>=6.1.0",
+    "torch>=2.14.0",
+    "uvicorn>=0.54.0",
     "httpx>=0.28.1",
-    "lmdb>=1.7.3",
+    "lmdb>=3.0.0",
 ]
 
 [project.scripts]
@@ -40,11 +40,11 @@ meow-embed = "meow_embed.cli:main"
 
 [dependency-groups]
 dev = [
-    "ir-datasets>=0.5.11",
-    "mypy>=1.20.0",
+    "ir-datasets>=0.6.3",
+    "mypy>=2.4.0",
     "mypy-test>=0.1.4",
-    "pyright>=1.1.408",
-    "pytest>=8.4.2",
+    "pyright>=1.1.414",
+    "pytest>=9.1.1",
 ]
 
 [tool.uv]
@@ -53,6 +53,3 @@ constraint-dependencies = ["urllib3>=2.7.0"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-
-[tool.hatch.metadata]
-allow-direct-references = true
