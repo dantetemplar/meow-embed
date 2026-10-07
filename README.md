@@ -15,6 +15,7 @@ It can return **dense + sparse + BGE-M3 (dense, sparse, colbert) in one request*
 There is already [Infinity](https://github.com/michaelfeil/infinity), but this project exists because:
 - sparse embeddings are needed
 - BGE-M3 colbert and sparse embeddings are needed
+- multimodal embeddings with interleaved text, images, video, and audio are needed
 - gzip request handling is needed end-to-end
 - one round-trip for dense + sparse is needed
 - patching upstream behavior was too complex
