@@ -16,12 +16,11 @@ from PIL import Image
 from meow_embed import EmbedCache, MeowEmbedClient, server
 from meow_embed.media import normalize_embed_payload
 from meow_embed.types import (
-    DenseEmbedOneRequestDict,
-    DenseEmbedRequestDict,
+    EmbedOneRequestPayload,
     EmbedRequestPayload,
     MediaDataDict,
-    ParsedEmbedOneDense,
-    ParsedEmbedResponseDense,
+    ParsedEmbedOne,
+    ParsedEmbedResponse,
 )
 
 
@@ -70,7 +69,7 @@ class DenseModelStub:
 def test_normalize_files_bytes_and_base64(tmp_path: Path) -> None:
     path = tmp_path / "shoe.png"
     path.write_bytes(image_bytes())
-    payload: DenseEmbedRequestDict = {
+    payload: EmbedRequestPayload = {
         "dense_model_id": "d",
         "texts": [
             {
@@ -282,12 +281,15 @@ def test_sync_client_typing_transport_and_cache(tmp_path: Path) -> None:
             base_url="http://test", transport=httpx.MockTransport(handler)
         ) as http:
             meow = MeowEmbedClient(client=http, cache=cache)
-            payload: DenseEmbedRequestDict = {
+            payload: EmbedRequestPayload = {
                 "dense_model_id": "d",
                 "texts": ["hello", {"image": path}],
             }
             result = meow.embed(payload)
-            assert_type(result, ParsedEmbedResponseDense)
+            assert_type(result, ParsedEmbedResponse)
+            assert result.dense is not None
+            assert result.sparse is None
+            assert result.bgeM3 is None
             assert result.dense.vectors.shape == (2, 2)
             meow.embed(payload)
             assert len(requests) == 1
@@ -299,12 +301,15 @@ def test_sync_client_typing_transport_and_cache(tmp_path: Path) -> None:
                 base64.b64decode(requests[1]["texts"][0]["image"][0]["data"])
                 == path.read_bytes()
             )
-            one: DenseEmbedOneRequestDict = {
+            one: EmbedOneRequestPayload = {
                 "dense_model_id": "d",
                 "text": {"image": path},
             }
             single = meow.embed_one(one)
-            assert_type(single, ParsedEmbedOneDense)
+            assert_type(single, ParsedEmbedOne)
+            assert single.dense is not None
+            assert single.sparse is None
+            assert single.bgeM3 is None
             assert single.dense.vector.shape == (2,)
             assert len(requests) == 2
     finally:
@@ -319,21 +324,28 @@ async def test_async_client_multimodal_typing_and_cache(tmp_path: Path) -> None:
             base_url="http://test", transport=httpx.MockTransport(transport_handler)
         ) as http:
             meow = MeowEmbedClient(aclient=http, cache=cache)
-            payload: DenseEmbedOneRequestDict = {
+            payload: EmbedOneRequestPayload = {
                 "dense_model_id": "d",
                 "text": {"image": image_bytes()},
             }
             result = await meow.aembed_one(payload)
-            assert_type(result, ParsedEmbedOneDense)
+            assert_type(result, ParsedEmbedOne)
+            assert result.dense is not None
+            assert result.sparse is None
+            assert result.bgeM3 is None
             assert result.dense.vector.shape == (2,)
             cached = await meow.aembed_one(payload)
             assert cached.server_timings is None
-            batch: DenseEmbedRequestDict = {
+            batch: EmbedRequestPayload = {
                 "dense_model_id": "d",
                 "texts": [payload["text"], "hello"],
             }
             many = await meow.aembed(batch)
-            assert_type(many, ParsedEmbedResponseDense)
+            assert_type(many, ParsedEmbedResponse)
+            assert many.dense is not None
+            assert many.sparse is None
+            assert many.bgeM3 is None
+            assert many.dense.vectors.shape == (2, 2)
             assert many.texts_count == 2
     finally:
         cache.close()

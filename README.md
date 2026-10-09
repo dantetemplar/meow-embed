@@ -125,6 +125,9 @@ result = meow.embed(
 print("======== embed ========")
 print(f"texts_count: {result.texts_count}")
 print(result.pretty_timings())
+assert result.dense is not None
+assert result.sparse is not None
+assert result.bgeM3 is not None
 
 print("dense")
 print(f"    .model_id: {result.dense.model_id}")
@@ -171,6 +174,9 @@ one = meow.embed_one(
         "bge_model_id": "BAAI/bge-m3",
     }
 ) # NOTE: async version is await meow.aembed_one(...)
+assert one.dense is not None
+assert one.sparse is not None
+assert one.bgeM3 is not None
 assert one.dense.vector.shape == (768,)
 print("======== embed one ========")
 print(one.pretty_timings())
@@ -203,6 +209,8 @@ print(f"    .colbert: {numpy_info(one.bgeM3.colbert)}")
 #     .sparse.item.values: [ndarray] shape=(3,), dtype=float32
 #     .colbert: [ndarray] shape=(4, 1024), dtype=float32
 ```
+
+`embed` / `aembed` return `ParsedEmbedResponse`; `embed_one` / `aembed_one` return `ParsedEmbedOne`. Both expose `dense`, `sparse`, and `bgeM3`: fields for models not requested are `None`. Requests use `EmbedRequestPayload` and `EmbedOneRequestPayload`; at least one model ID is required at runtime.
 
 Rerank with FlagReranker (`BAAI/bge-reranker-v2-m3`) or CrossEncoder (`jinaai/jina-reranker-v2-base-multilingual`):
 
@@ -313,7 +321,7 @@ from pathlib import Path
 import httpx
 
 from meow_embed import EmbedCache, MeowEmbedClient
-from meow_embed.types import DenseSparseEmbedRequestDict
+from meow_embed.types import EmbedRequestPayload
 
 
 with tempfile.TemporaryDirectory() as tmp:
@@ -324,7 +332,7 @@ with tempfile.TemporaryDirectory() as tmp:
             httpx.Client(base_url="http://127.0.0.1:8067"),
             cache=cache,
         )
-        payload: DenseSparseEmbedRequestDict = {
+        payload: EmbedRequestPayload = {
             "texts": ["hello world", "cache demo"],
             "dense_model_id": "sergeyzh/BERTA",
             "sparse_model_id": "opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1",

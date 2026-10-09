@@ -16,7 +16,7 @@ from PIL import Image
 from sentence_transformers import SentenceTransformer
 
 from meow_embed import EmbedCache, MeowEmbedClient, server
-from meow_embed.types import DenseEmbedRequestDict, EmbedInput
+from meow_embed.types import EmbedRequestPayload, EmbedInput
 
 pytestmark = pytest.mark.skipif(
     os.getenv("MEOW_EMBED_TEST_EMBEDDINGGEMMA") != "1",
@@ -37,11 +37,11 @@ def media_files(tmp_path: Path) -> dict[str, Path]:
     image = tmp_path / "image.png"
     Image.new("RGB", (64, 64), "red").save(image)
     audio = tmp_path / "audio.wav"
-    with wave.open(str(audio), "wb") as stream:
-        stream.setnchannels(2)
-        stream.setsampwidth(2)
-        stream.setframerate(32000)
-        stream.writeframes(np.zeros((32000, 2), dtype=np.int16).tobytes())
+    with wave.open(str(audio), "wb") as audio_stream:
+        audio_stream.setnchannels(2)
+        audio_stream.setsampwidth(2)
+        audio_stream.setframerate(32000)
+        audio_stream.writeframes(np.zeros((32000, 2), dtype=np.int16).tobytes())
     video = tmp_path / "video.mp4"
     with av.open(str(video), mode="w") as container:
         stream = container.add_stream("mpeg4", rate=2)
@@ -108,15 +108,19 @@ def test_real_model_all_modalities_and_cache(
                     },
                     {"text": "A red image", "image": media_files["image"]},
                 ]
-                payload: DenseEmbedRequestDict = {
+                payload: EmbedRequestPayload = {
                     "dense_model_id": MODEL_ID,
                     "texts": inputs,
                 }
                 result = client.embed(payload)
+                assert result.dense is not None
+                assert result.sparse is None
+                assert result.bgeM3 is None
                 assert result.dense.vectors.shape == (6, 768)
                 assert np.isfinite(result.dense.vectors).all()
                 assert (np.linalg.norm(result.dense.vectors, axis=1) > 0).all()
                 cached = client.embed(payload)
+                assert cached.dense is not None
                 np.testing.assert_array_equal(
                     result.dense.vectors, cached.dense.vectors
                 )
@@ -124,6 +128,7 @@ def test_real_model_all_modalities_and_cache(
                 assert cached.server_timings is None
                 for index, item in enumerate(inputs):
                     one = client.embed_one({"dense_model_id": MODEL_ID, "text": item})
+                    assert one.dense is not None
                     np.testing.assert_array_equal(
                         one.dense.vector, result.dense.vectors[index]
                     )
@@ -140,7 +145,7 @@ def test_real_model_tasks_prompts_and_truncation(
 ) -> None:
     from meow_embed.media import normalize_embed_payload
 
-    payload: DenseEmbedRequestDict = {
+    payload: EmbedRequestPayload = {
         "dense_model_id": MODEL_ID,
         "dense_task": task,
         "dense_prompt": "title: none | text: ",
@@ -152,21 +157,23 @@ def test_real_model_tasks_prompts_and_truncation(
     }
     request = server.EmbedRequest.model_validate(normalize_embed_payload(payload))
     actual = server.encode_dense_inputs(real_model, request)
-    expected_encode = {
-        None: real_model.encode,
-        "query": real_model.encode_query,
-        "document": real_model.encode_document,
-    }[task]
     with Image.open(media_files["image"]) as image:
-        expected = expected_encode(
-            {
-                "text": "title: none | text: Shoes <|image|>",
-                "image": [image.convert("RGB")],
-            },
-            prompt="",
-            truncate_dim=256,
-            convert_to_numpy=True,
-        )
+        inputs: dict[str, Any] = {
+            "text": "title: none | text: Shoes <|image|>",
+            "image": [image.convert("RGB")],
+        }
+        if task == "query":
+            expected = real_model.encode_query(
+                inputs, prompt="", truncate_dim=256, convert_to_numpy=True
+            )
+        elif task == "document":
+            expected = real_model.encode_document(
+                inputs, prompt="", truncate_dim=256, convert_to_numpy=True
+            )
+        else:
+            expected = real_model.encode(
+                inputs, prompt="", truncate_dim=256, convert_to_numpy=True
+            )
     assert actual.shape == (2, 256)
     assert np.isfinite(actual).all()
     np.testing.assert_allclose(actual[1], expected, rtol=1e-5, atol=1e-6)

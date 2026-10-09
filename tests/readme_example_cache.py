@@ -4,7 +4,7 @@ from pathlib import Path
 import httpx
 
 from meow_embed import EmbedCache, MeowEmbedClient
-from meow_embed.types import DenseSparseEmbedRequestDict
+from meow_embed.types import EmbedRequestPayload
 
 with tempfile.TemporaryDirectory() as tmp:
     cache_path = Path(tmp) / "embed-cache.lmdb"
@@ -14,7 +14,7 @@ with tempfile.TemporaryDirectory() as tmp:
             httpx.Client(base_url="http://127.0.0.1:8067"),
             cache=cache,
         )
-        payload: DenseSparseEmbedRequestDict = {
+        payload: EmbedRequestPayload = {
             "texts": ["hello world", "cache demo"],
             "dense_model_id": "sergeyzh/BERTA",
             "sparse_model_id": "opensearch-project/opensearch-neural-sparse-encoding-multilingual-v1",

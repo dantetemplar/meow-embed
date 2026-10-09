@@ -46,6 +46,7 @@ print(f"texts_count: {result.texts_count}")
 print(result.pretty_timings())
 
 print("dense")
+assert result.dense is not None
 print(f"    .model_id: {result.dense.model_id}")
 print(f"    .vectors: {numpy_info(result.dense.vectors)}")
 # dense
@@ -53,6 +54,7 @@ print(f"    .vectors: {numpy_info(result.dense.vectors)}")
 # .vectors: [ndarray] shape=(2, 768), dtype=float32
 
 print("sparse")
+assert result.sparse is not None
 print(f"    .model_id: {result.sparse.model_id}")
 print(f"    .items: total {len(result.sparse.items)} items")
 print(f"        .[0].indices: {numpy_info(result.sparse.items[0].indices)}")
@@ -64,6 +66,7 @@ print(f"        .[0].values: {numpy_info(result.sparse.items[0].values)}")
 #     .[0].values: [ndarray] shape=(226,), dtype=float32
 
 print("bgeM3")
+assert result.bgeM3 is not None
 print(f"    .model_id: {result.bgeM3.model_id}")
 print(f"    .dense.vectors: {numpy_info(result.bgeM3.dense.vectors)}")
 print(f"    .sparse.items: total {len(result.bgeM3.sparse.items)} items")
@@ -90,6 +93,9 @@ one = meow.embed_one(
         "bge_model_id": "BAAI/bge-m3",
     }
 )  # NOTE: async version is await meow.aembed_one(...)
+assert one.dense is not None
+assert one.sparse is not None
+assert one.bgeM3 is not None
 assert one.dense.vector.shape == (768,)
 print("======== embed one ========")
 print(one.pretty_timings())

@@ -23,14 +23,7 @@ from meow_embed.types import (
     EmbedInput,
     EmbedRequestPayload,
     Float32Array,
-    ParsedEmbedResponseBGEM3,
-    ParsedEmbedResponseDense,
-    ParsedEmbedResponseDenseBGEM3,
-    ParsedEmbedResponseDenseSparse,
-    ParsedEmbedResponseDenseSparseBGEM3,
-    ParsedEmbedResponseSparse,
-    ParsedEmbedResponseSparseBGEM3,
-    ParsedEmbedResponseVariant,
+    ParsedEmbedResponse,
     SparseEmbedding,
     SparseEmbeddings,
     UInt32Array,
@@ -143,77 +136,25 @@ class _StreamHandler[V](ABC):
     def make_keys(self, texts: Sequence[str]) -> list[bytes]: ...
 
     @abstractmethod
-    def extract(self, remote: ParsedEmbedResponseVariant, miss_row: int) -> V: ...
+    def extract(self, remote: ParsedEmbedResponse, miss_row: int) -> V: ...
 
 
-_DENSE_VARIANTS = (
-    ParsedEmbedResponseDense,
-    ParsedEmbedResponseDenseSparse,
-    ParsedEmbedResponseDenseBGEM3,
-    ParsedEmbedResponseDenseSparseBGEM3,
-)
-_SPARSE_VARIANTS = (
-    ParsedEmbedResponseSparse,
-    ParsedEmbedResponseDenseSparse,
-    ParsedEmbedResponseSparseBGEM3,
-    ParsedEmbedResponseDenseSparseBGEM3,
-)
-_BGE_VARIANTS = (
-    ParsedEmbedResponseBGEM3,
-    ParsedEmbedResponseDenseBGEM3,
-    ParsedEmbedResponseSparseBGEM3,
-    ParsedEmbedResponseDenseSparseBGEM3,
-)
-
-
-def _expect_dense_variant(remote: ParsedEmbedResponseVariant) -> None:
-    if not isinstance(remote, _DENSE_VARIANTS):
+def _expect_dense(remote: ParsedEmbedResponse) -> DenseEmbeddings:
+    if remote.dense is None:
         raise ValueError("Dense cache expected dense embeddings in server response.")
+    return remote.dense
 
 
-def _expect_sparse_variant(remote: ParsedEmbedResponseVariant) -> None:
-    if not isinstance(remote, _SPARSE_VARIANTS):
+def _expect_sparse(remote: ParsedEmbedResponse) -> SparseEmbeddings:
+    if remote.sparse is None:
         raise ValueError("Sparse cache expected sparse embeddings in server response.")
+    return remote.sparse
 
 
-def _expect_bge_variant(remote: ParsedEmbedResponseVariant) -> None:
-    if not isinstance(remote, _BGE_VARIANTS):
+def _expect_bge(remote: ParsedEmbedResponse) -> BGEM3Embeddings:
+    if remote.bgeM3 is None:
         raise ValueError("BGE-M3 cache expected bgeM3 embeddings in server response.")
-
-
-DenseRemote = (
-    ParsedEmbedResponseDense
-    | ParsedEmbedResponseDenseSparse
-    | ParsedEmbedResponseDenseBGEM3
-    | ParsedEmbedResponseDenseSparseBGEM3
-)
-SparseRemote = (
-    ParsedEmbedResponseSparse
-    | ParsedEmbedResponseDenseSparse
-    | ParsedEmbedResponseSparseBGEM3
-    | ParsedEmbedResponseDenseSparseBGEM3
-)
-BgeRemote = (
-    ParsedEmbedResponseBGEM3
-    | ParsedEmbedResponseDenseBGEM3
-    | ParsedEmbedResponseSparseBGEM3
-    | ParsedEmbedResponseDenseSparseBGEM3
-)
-
-
-def _as_dense_variant(remote: ParsedEmbedResponseVariant) -> DenseRemote:
-    _expect_dense_variant(remote)
-    return cast(DenseRemote, remote)
-
-
-def _as_sparse_variant(remote: ParsedEmbedResponseVariant) -> SparseRemote:
-    _expect_sparse_variant(remote)
-    return cast(SparseRemote, remote)
-
-
-def _as_bge_variant(remote: ParsedEmbedResponseVariant) -> BgeRemote:
-    _expect_bge_variant(remote)
-    return cast(BgeRemote, remote)
+    return remote.bgeM3
 
 
 class _DenseHandler(_StreamHandler[Float32Array]):
@@ -253,12 +194,12 @@ class _DenseHandler(_StreamHandler[Float32Array]):
         ]
 
     def extract(
-        self, remote: ParsedEmbedResponseVariant, miss_row: int
+        self, remote: ParsedEmbedResponse, miss_row: int
     ) -> Float32Array:
-        remote_dense = _as_dense_variant(remote)
+        dense = _expect_dense(remote)
         return cast(
             Float32Array,
-            np.asarray(remote_dense.dense.vectors[miss_row], dtype=np.float32),
+            np.asarray(dense.vectors[miss_row], dtype=np.float32),
         )
 
 
@@ -307,10 +248,10 @@ class _SparseHandler(_StreamHandler[SparseEmbedding]):
         ]
 
     def extract(
-        self, remote: ParsedEmbedResponseVariant, miss_row: int
+        self, remote: ParsedEmbedResponse, miss_row: int
     ) -> SparseEmbedding:
-        remote_sparse = _as_sparse_variant(remote)
-        return remote_sparse.sparse.items[miss_row]
+        sparse = _expect_sparse(remote)
+        return sparse.items[miss_row]
 
 
 class _BgeHandler[V](_StreamHandler[V]):
@@ -323,7 +264,7 @@ class _BgeHandler[V](_StreamHandler[V]):
         model_id: str,
         key_tag: bytes,
         codec: _Codec[V],
-        extractor: Callable[[BgeRemote, int], V],
+        extractor: Callable[[BGEM3Embeddings, int], V],
     ) -> None:
         super().__init__(model_id, codec)
         self.kind = kind
@@ -337,9 +278,9 @@ class _BgeHandler[V](_StreamHandler[V]):
             for text in texts
         ]
 
-    def extract(self, remote: ParsedEmbedResponseVariant, miss_row: int) -> V:
-        remote_bge = _as_bge_variant(remote)
-        return self._extractor(remote_bge, miss_row)
+    def extract(self, remote: ParsedEmbedResponse, miss_row: int) -> V:
+        bge = _expect_bge(remote)
+        return self._extractor(bge, miss_row)
 
 
 @dataclass(slots=True)
@@ -387,9 +328,9 @@ def _build_handlers(payload: EmbedRequestPayload) -> list[_StreamHandler[Any]]:
                 model_id=bge_model_id,
                 key_tag=b"bge_dense",
                 codec=_F16VectorCodec(expected_dim=None),
-                extractor=lambda remote, i: cast(
+                extractor=lambda bge, i: cast(
                     Float32Array,
-                    np.asarray(remote.bgeM3.dense.vectors[i], dtype=np.float32),
+                    np.asarray(bge.dense.vectors[i], dtype=np.float32),
                 ),
             )
         )
@@ -399,7 +340,7 @@ def _build_handlers(payload: EmbedRequestPayload) -> list[_StreamHandler[Any]]:
                 model_id=bge_model_id,
                 key_tag=b"bge_sparse",
                 codec=_SparseCodec(),
-                extractor=lambda remote, i: remote.bgeM3.sparse.items[i],
+                extractor=lambda bge, i: bge.sparse.items[i],
             )
         )
         handlers.append(
@@ -408,9 +349,9 @@ def _build_handlers(payload: EmbedRequestPayload) -> list[_StreamHandler[Any]]:
                 model_id=bge_model_id,
                 key_tag=b"bge_colbert",
                 codec=_F16MatrixCodec(),
-                extractor=lambda remote, i: cast(
+                extractor=lambda bge, i: cast(
                     Float32Array,
-                    np.asarray(remote.bgeM3.colbert[i], dtype=np.float32),
+                    np.asarray(bge.colbert[i], dtype=np.float32),
                 ),
             )
         )
@@ -495,7 +436,7 @@ class EmbedCache:
         )
 
     def merge_remote(
-        self, progress: EmbedCacheProgress, remote: ParsedEmbedResponseVariant
+        self, progress: EmbedCacheProgress, remote: ParsedEmbedResponse
     ) -> None:
         for slot in progress.streams:
             to_store: list[tuple[bytes, bytes]] = []
@@ -513,7 +454,7 @@ class EmbedCache:
         *,
         server_timings: dict[str, float] | None = None,
         client_timings: dict[str, float] | None = None,
-    ) -> ParsedEmbedResponseVariant:
+    ) -> ParsedEmbedResponse:
         dense_em: DenseEmbeddings | None = None
         sparse_em: SparseEmbeddings | None = None
         bge_dense_vec: Float32Array | None = None

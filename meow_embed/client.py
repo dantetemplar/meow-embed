@@ -5,7 +5,7 @@ import gzip
 import json
 import time
 from contextvars import ContextVar
-from typing import cast, overload
+from typing import cast
 
 import httpx
 import numpy as np
@@ -114,47 +114,9 @@ class MeowEmbedClient:
         response.raise_for_status()
         return response.json()
 
-    @overload
-    def embed(
-        self,
-        payload: t.DenseSparseBGEM3EmbedRequestDict,
-        *,
-        use_cache: bool | None = None,
-    ) -> t.ParsedEmbedResponseDenseSparseBGEM3: ...
-
-    @overload
-    def embed(
-        self, payload: t.DenseSparseEmbedRequestDict, *, use_cache: bool | None = None
-    ) -> t.ParsedEmbedResponseDenseSparse: ...
-
-    @overload
-    def embed(
-        self, payload: t.DenseBGEM3EmbedRequestDict, *, use_cache: bool | None = None
-    ) -> t.ParsedEmbedResponseDenseBGEM3: ...
-
-    @overload
-    def embed(
-        self, payload: t.SparseBGEM3EmbedRequestDict, *, use_cache: bool | None = None
-    ) -> t.ParsedEmbedResponseSparseBGEM3: ...
-
-    @overload
-    def embed(
-        self, payload: t.DenseEmbedRequestDict, *, use_cache: bool | None = None
-    ) -> t.ParsedEmbedResponseDense: ...
-
-    @overload
-    def embed(
-        self, payload: t.SparseEmbedRequestDict, *, use_cache: bool | None = None
-    ) -> t.ParsedEmbedResponseSparse: ...
-
-    @overload
-    def embed(
-        self, payload: t.BGEM3EmbedRequestDict, *, use_cache: bool | None = None
-    ) -> t.ParsedEmbedResponseBGEM3: ...
-
     def embed(
         self, payload: t.EmbedRequestPayload, *, use_cache: bool | None = None
-    ) -> t.ParsedEmbedResponseVariant:
+    ) -> t.ParsedEmbedResponse:
         timeline_token = timing_timeline.set({})
         try:
             payload = normalize_embed_payload(payload)
@@ -200,7 +162,7 @@ class MeowEmbedClient:
     def _embed_remote(
         self,
         payload: t.EmbedRequestPayload,
-    ) -> t.ParsedEmbedResponseVariant:
+    ) -> t.ParsedEmbedResponse:
         gzipped_payload = gzip.compress(json.dumps(payload).encode("utf-8"))
         self._append_timeline_timestamp("payload_compress_ms")
         response = self.client.post(
@@ -245,47 +207,9 @@ class MeowEmbedClient:
         miss_payload["texts"] = [prepared.texts[idx] for idx in prepared.misses]
         return cast(t.EmbedRequestPayload, miss_payload)
 
-    @overload
-    async def aembed(
-        self,
-        payload: t.DenseSparseBGEM3EmbedRequestDict,
-        *,
-        use_cache: bool | None = None,
-    ) -> t.ParsedEmbedResponseDenseSparseBGEM3: ...
-
-    @overload
-    async def aembed(
-        self, payload: t.DenseSparseEmbedRequestDict, *, use_cache: bool | None = None
-    ) -> t.ParsedEmbedResponseDenseSparse: ...
-
-    @overload
-    async def aembed(
-        self, payload: t.DenseBGEM3EmbedRequestDict, *, use_cache: bool | None = None
-    ) -> t.ParsedEmbedResponseDenseBGEM3: ...
-
-    @overload
-    async def aembed(
-        self, payload: t.SparseBGEM3EmbedRequestDict, *, use_cache: bool | None = None
-    ) -> t.ParsedEmbedResponseSparseBGEM3: ...
-
-    @overload
-    async def aembed(
-        self, payload: t.DenseEmbedRequestDict, *, use_cache: bool | None = None
-    ) -> t.ParsedEmbedResponseDense: ...
-
-    @overload
-    async def aembed(
-        self, payload: t.SparseEmbedRequestDict, *, use_cache: bool | None = None
-    ) -> t.ParsedEmbedResponseSparse: ...
-
-    @overload
-    async def aembed(
-        self, payload: t.BGEM3EmbedRequestDict, *, use_cache: bool | None = None
-    ) -> t.ParsedEmbedResponseBGEM3: ...
-
     async def aembed(
         self, payload: t.EmbedRequestPayload, *, use_cache: bool | None = None
-    ) -> t.ParsedEmbedResponseVariant:
+    ) -> t.ParsedEmbedResponse:
         timeline_token = timing_timeline.set({})
         try:
             payload = await asyncio.to_thread(normalize_embed_payload, payload)
@@ -331,7 +255,7 @@ class MeowEmbedClient:
     async def _aembed_remote(
         self,
         payload: t.EmbedRequestPayload,
-    ) -> t.ParsedEmbedResponseVariant:
+    ) -> t.ParsedEmbedResponse:
         gzipped_payload = gzip.compress(json.dumps(payload).encode("utf-8"))
         self._append_timeline_timestamp("payload_compress_ms")
         response = await self.aclient.post(
@@ -358,108 +282,18 @@ class MeowEmbedClient:
         parsed.client_timings = self._timeline_snapshot()
         return parsed
 
-    @overload
-    def embed_one(
-        self,
-        payload: t.DenseSparseBGEM3EmbedOneRequestDict,
-        *,
-        use_cache: bool | None = None,
-    ) -> t.ParsedEmbedOneDenseSparseBGEM3: ...
-
-    @overload
-    def embed_one(
-        self,
-        payload: t.DenseSparseEmbedOneRequestDict,
-        *,
-        use_cache: bool | None = None,
-    ) -> t.ParsedEmbedOneDenseSparse: ...
-
-    @overload
-    def embed_one(
-        self, payload: t.DenseBGEM3EmbedOneRequestDict, *, use_cache: bool | None = None
-    ) -> t.ParsedEmbedOneDenseBGEM3: ...
-
-    @overload
-    def embed_one(
-        self,
-        payload: t.SparseBGEM3EmbedOneRequestDict,
-        *,
-        use_cache: bool | None = None,
-    ) -> t.ParsedEmbedOneSparseBGEM3: ...
-
-    @overload
-    def embed_one(
-        self, payload: t.DenseEmbedOneRequestDict, *, use_cache: bool | None = None
-    ) -> t.ParsedEmbedOneDense: ...
-
-    @overload
-    def embed_one(
-        self, payload: t.SparseEmbedOneRequestDict, *, use_cache: bool | None = None
-    ) -> t.ParsedEmbedOneSparse: ...
-
-    @overload
-    def embed_one(
-        self, payload: t.BGEM3EmbedOneRequestDict, *, use_cache: bool | None = None
-    ) -> t.ParsedEmbedOneBGEM3: ...
-
     def embed_one(
         self, payload: t.EmbedOneRequestPayload, *, use_cache: bool | None = None
-    ) -> t.ParsedEmbedOneVariant:
+    ) -> t.ParsedEmbedOne:
         batch = self._embed_one_payload_as_embed_many_payload(payload)
-        parsed = self.embed(cast(t.EmbedRequestPayload, batch), use_cache=use_cache)
+        parsed = self.embed(batch, use_cache=use_cache)
         return self._parsed_embed_batch_to_one(parsed)
 
-    @overload
-    async def aembed_one(
-        self,
-        payload: t.DenseSparseBGEM3EmbedOneRequestDict,
-        *,
-        use_cache: bool | None = None,
-    ) -> t.ParsedEmbedOneDenseSparseBGEM3: ...
-
-    @overload
-    async def aembed_one(
-        self,
-        payload: t.DenseSparseEmbedOneRequestDict,
-        *,
-        use_cache: bool | None = None,
-    ) -> t.ParsedEmbedOneDenseSparse: ...
-
-    @overload
-    async def aembed_one(
-        self, payload: t.DenseBGEM3EmbedOneRequestDict, *, use_cache: bool | None = None
-    ) -> t.ParsedEmbedOneDenseBGEM3: ...
-
-    @overload
-    async def aembed_one(
-        self,
-        payload: t.SparseBGEM3EmbedOneRequestDict,
-        *,
-        use_cache: bool | None = None,
-    ) -> t.ParsedEmbedOneSparseBGEM3: ...
-
-    @overload
-    async def aembed_one(
-        self, payload: t.DenseEmbedOneRequestDict, *, use_cache: bool | None = None
-    ) -> t.ParsedEmbedOneDense: ...
-
-    @overload
-    async def aembed_one(
-        self, payload: t.SparseEmbedOneRequestDict, *, use_cache: bool | None = None
-    ) -> t.ParsedEmbedOneSparse: ...
-
-    @overload
-    async def aembed_one(
-        self, payload: t.BGEM3EmbedOneRequestDict, *, use_cache: bool | None = None
-    ) -> t.ParsedEmbedOneBGEM3: ...
-
     async def aembed_one(
         self, payload: t.EmbedOneRequestPayload, *, use_cache: bool | None = None
-    ) -> t.ParsedEmbedOneVariant:
+    ) -> t.ParsedEmbedOne:
         batch = self._embed_one_payload_as_embed_many_payload(payload)
-        parsed = await self.aembed(
-            cast(t.EmbedRequestPayload, batch), use_cache=use_cache
-        )
+        parsed = await self.aembed(batch, use_cache=use_cache)
         return self._parsed_embed_batch_to_one(parsed)
 
     @classmethod
@@ -476,13 +310,8 @@ class MeowEmbedClient:
 
     @classmethod
     def _parsed_embed_batch_to_one(
-        cls, response: t.ParsedEmbedResponseVariant
-    ) -> t.ParsedEmbedOneVariant:
-        common_kwargs = {
-            "server_timings": response.server_timings,
-            "client_timings": dict(response.client_timings),
-        }
-
+        cls, response: t.ParsedEmbedResponse
+    ) -> t.ParsedEmbedOne:
         def _dense_emb_to_vector(dense: t.DenseEmbeddings) -> t.DenseEmbeddingVector:
             if dense.vectors.shape[0] != 1:
                 raise ValueError(
@@ -523,44 +352,25 @@ class MeowEmbedClient:
 
         if response.texts_count != 1:
             raise ValueError("embed_one requires texts_count == 1.")
-        if isinstance(response, t.ParsedEmbedResponseDenseSparseBGEM3):
-            return t.ParsedEmbedOneDenseSparseBGEM3(
-                **common_kwargs,
-                dense=_dense_emb_to_vector(response.dense),
-                sparse=_sparse_emb_to_one(response.sparse),
-                bgeM3=_bge_m3_emb_to_one(response.bgeM3),
-            )
-        if isinstance(response, t.ParsedEmbedResponseDenseSparse):
-            return t.ParsedEmbedOneDenseSparse(
-                **common_kwargs,
-                dense=_dense_emb_to_vector(response.dense),
-                sparse=_sparse_emb_to_one(response.sparse),
-            )
-        if isinstance(response, t.ParsedEmbedResponseDenseBGEM3):
-            return t.ParsedEmbedOneDenseBGEM3(
-                **common_kwargs,
-                dense=_dense_emb_to_vector(response.dense),
-                bgeM3=_bge_m3_emb_to_one(response.bgeM3),
-            )
-        if isinstance(response, t.ParsedEmbedResponseSparseBGEM3):
-            return t.ParsedEmbedOneSparseBGEM3(
-                **common_kwargs,
-                sparse=_sparse_emb_to_one(response.sparse),
-                bgeM3=_bge_m3_emb_to_one(response.bgeM3),
-            )
-        if isinstance(response, t.ParsedEmbedResponseDense):
-            return t.ParsedEmbedOneDense(
-                **common_kwargs, dense=_dense_emb_to_vector(response.dense)
-            )
-        if isinstance(response, t.ParsedEmbedResponseSparse):
-            return t.ParsedEmbedOneSparse(
-                **common_kwargs, sparse=_sparse_emb_to_one(response.sparse)
-            )
-        if isinstance(response, t.ParsedEmbedResponseBGEM3):
-            return t.ParsedEmbedOneBGEM3(
-                **common_kwargs, bgeM3=_bge_m3_emb_to_one(response.bgeM3)
-            )
-        raise AssertionError("Unreachable embed response variant.")
+        return t.ParsedEmbedOne(
+            server_timings=response.server_timings,
+            client_timings=dict(response.client_timings),
+            dense=(
+                _dense_emb_to_vector(response.dense)
+                if response.dense is not None
+                else None
+            ),
+            sparse=(
+                _sparse_emb_to_one(response.sparse)
+                if response.sparse is not None
+                else None
+            ),
+            bgeM3=(
+                _bge_m3_emb_to_one(response.bgeM3)
+                if response.bgeM3 is not None
+                else None
+            ),
+        )
 
     def rerank(self, payload: t.RerankRequestDict) -> t.ParsedRerankResponse:
         gzipped_payload = gzip.compress(json.dumps(payload).encode("utf-8"))

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, NotRequired, Required, Sequence, TypedDict
+from typing import Literal, NotRequired, Sequence, TypedDict
 
 import numpy as np
 import numpy.typing as npt
@@ -33,132 +33,24 @@ class MultimodalInputDict(TypedDict, total=False):
 type EmbedInput = str | MultimodalInputDict
 
 
-class EmbedRequestCommonDict(TypedDict):
+class _EmbedOptions(TypedDict, total=False):
+    dense_model_id: ReadOnly[str | None]
+    sparse_model_id: ReadOnly[str | None]
+    bge_model_id: ReadOnly[str | None]
+    dense_truncate_dim: ReadOnly[int | None]
+    dense_prompt: ReadOnly[str]
+    dense_task: ReadOnly[Literal["query", "document"] | None]
+    sparse_max_active_dims: ReadOnly[int | None]
+    sparse_pruning_ratio: ReadOnly[float | None]
+    sparse_task: ReadOnly[Literal["query", "document"] | None]
+
+
+class EmbedRequestPayload(_EmbedOptions):
     texts: ReadOnly[Sequence[EmbedInput]]
-    dense_truncate_dim: ReadOnly[NotRequired[int | None]]
-    dense_prompt: ReadOnly[NotRequired[str]]
-    dense_task: ReadOnly[NotRequired[Literal["query", "document"] | None]]
-    sparse_max_active_dims: ReadOnly[NotRequired[int | None]]
-    sparse_pruning_ratio: ReadOnly[NotRequired[float | None]]
-    sparse_task: ReadOnly[NotRequired[Literal["query", "document"] | None]]
 
 
-class DenseEmbedRequestDict(EmbedRequestCommonDict):
-    dense_model_id: ReadOnly[Required[str]]
-    sparse_model_id: ReadOnly[NotRequired[None]]
-    bge_model_id: ReadOnly[NotRequired[None]]
-
-
-class SparseEmbedRequestDict(EmbedRequestCommonDict):
-    dense_model_id: ReadOnly[NotRequired[None]]
-    sparse_model_id: ReadOnly[Required[str]]
-    bge_model_id: ReadOnly[NotRequired[None]]
-
-
-class BGEM3EmbedRequestDict(EmbedRequestCommonDict):
-    dense_model_id: ReadOnly[NotRequired[None]]
-    sparse_model_id: ReadOnly[NotRequired[None]]
-    bge_model_id: ReadOnly[Required[str]]
-
-
-class DenseSparseEmbedRequestDict(EmbedRequestCommonDict):
-    dense_model_id: ReadOnly[Required[str]]
-    sparse_model_id: ReadOnly[Required[str]]
-    bge_model_id: ReadOnly[NotRequired[None]]
-
-
-class DenseBGEM3EmbedRequestDict(EmbedRequestCommonDict):
-    dense_model_id: ReadOnly[Required[str]]
-    sparse_model_id: ReadOnly[NotRequired[None]]
-    bge_model_id: ReadOnly[Required[str]]
-
-
-class SparseBGEM3EmbedRequestDict(EmbedRequestCommonDict):
-    dense_model_id: ReadOnly[NotRequired[None]]
-    sparse_model_id: ReadOnly[Required[str]]
-    bge_model_id: ReadOnly[Required[str]]
-
-
-class DenseSparseBGEM3EmbedRequestDict(EmbedRequestCommonDict):
-    dense_model_id: ReadOnly[Required[str]]
-    sparse_model_id: ReadOnly[Required[str]]
-    bge_model_id: ReadOnly[Required[str]]
-
-
-EmbedRequestPayload = (
-    DenseEmbedRequestDict
-    | SparseEmbedRequestDict
-    | BGEM3EmbedRequestDict
-    | DenseSparseEmbedRequestDict
-    | DenseBGEM3EmbedRequestDict
-    | SparseBGEM3EmbedRequestDict
-    | DenseSparseBGEM3EmbedRequestDict
-)
-
-
-class EmbedOneRequestCommonDict(TypedDict):
-    text: ReadOnly[Required[EmbedInput]]
-
-    dense_truncate_dim: ReadOnly[NotRequired[int | None]]
-    dense_prompt: ReadOnly[NotRequired[str]]
-    dense_task: ReadOnly[NotRequired[Literal["query", "document"] | None]]
-
-    sparse_max_active_dims: ReadOnly[NotRequired[int | None]]
-    sparse_pruning_ratio: ReadOnly[NotRequired[float | None]]
-    sparse_task: ReadOnly[NotRequired[Literal["query", "document"] | None]]
-
-
-class DenseEmbedOneRequestDict(EmbedOneRequestCommonDict):
-    dense_model_id: ReadOnly[Required[str]]
-    sparse_model_id: ReadOnly[NotRequired[None]]
-    bge_model_id: ReadOnly[NotRequired[None]]
-
-
-class SparseEmbedOneRequestDict(EmbedOneRequestCommonDict):
-    dense_model_id: ReadOnly[NotRequired[None]]
-    sparse_model_id: ReadOnly[Required[str]]
-    bge_model_id: ReadOnly[NotRequired[None]]
-
-
-class BGEM3EmbedOneRequestDict(EmbedOneRequestCommonDict):
-    dense_model_id: ReadOnly[NotRequired[None]]
-    sparse_model_id: ReadOnly[NotRequired[None]]
-    bge_model_id: ReadOnly[Required[str]]
-
-
-class DenseSparseEmbedOneRequestDict(EmbedOneRequestCommonDict):
-    dense_model_id: ReadOnly[Required[str]]
-    sparse_model_id: ReadOnly[Required[str]]
-    bge_model_id: ReadOnly[NotRequired[None]]
-
-
-class DenseBGEM3EmbedOneRequestDict(EmbedOneRequestCommonDict):
-    dense_model_id: ReadOnly[Required[str]]
-    sparse_model_id: ReadOnly[NotRequired[None]]
-    bge_model_id: ReadOnly[Required[str]]
-
-
-class SparseBGEM3EmbedOneRequestDict(EmbedOneRequestCommonDict):
-    dense_model_id: ReadOnly[NotRequired[None]]
-    sparse_model_id: ReadOnly[Required[str]]
-    bge_model_id: ReadOnly[Required[str]]
-
-
-class DenseSparseBGEM3EmbedOneRequestDict(EmbedOneRequestCommonDict):
-    dense_model_id: ReadOnly[Required[str]]
-    sparse_model_id: ReadOnly[Required[str]]
-    bge_model_id: ReadOnly[Required[str]]
-
-
-EmbedOneRequestPayload = (
-    DenseEmbedOneRequestDict
-    | SparseEmbedOneRequestDict
-    | BGEM3EmbedOneRequestDict
-    | DenseSparseEmbedOneRequestDict
-    | DenseBGEM3EmbedOneRequestDict
-    | SparseBGEM3EmbedOneRequestDict
-    | DenseSparseBGEM3EmbedOneRequestDict
-)
+class EmbedOneRequestPayload(_EmbedOptions):
+    text: ReadOnly[EmbedInput]
 
 
 class RerankRequestDict(TypedDict):
@@ -427,61 +319,13 @@ class _PrettyTimingsMixin:
 
 
 @dataclass(slots=True)
-class ParsedEmbedResponseCommon(_PrettyTimingsMixin):
+class ParsedEmbedResponse(_PrettyTimingsMixin):
     texts_count: int
     server_timings: dict[str, float] | None
     client_timings: dict[str, float]
-
-
-@dataclass(slots=True, kw_only=True)
-class ParsedEmbedResponseDense(ParsedEmbedResponseCommon):
-    dense: DenseEmbeddings
-
-
-@dataclass(slots=True, kw_only=True)
-class ParsedEmbedResponseSparse(ParsedEmbedResponseCommon):
-    sparse: SparseEmbeddings
-
-
-@dataclass(slots=True, kw_only=True)
-class ParsedEmbedResponseBGEM3(ParsedEmbedResponseCommon):
-    bgeM3: BGEM3Embeddings
-
-
-@dataclass(slots=True, kw_only=True)
-class ParsedEmbedResponseDenseSparse(ParsedEmbedResponseCommon):
-    dense: DenseEmbeddings
-    sparse: SparseEmbeddings
-
-
-@dataclass(slots=True, kw_only=True)
-class ParsedEmbedResponseDenseBGEM3(ParsedEmbedResponseCommon):
-    dense: DenseEmbeddings
-    bgeM3: BGEM3Embeddings
-
-
-@dataclass(slots=True, kw_only=True)
-class ParsedEmbedResponseSparseBGEM3(ParsedEmbedResponseCommon):
-    sparse: SparseEmbeddings
-    bgeM3: BGEM3Embeddings
-
-
-@dataclass(slots=True, kw_only=True)
-class ParsedEmbedResponseDenseSparseBGEM3(ParsedEmbedResponseCommon):
-    dense: DenseEmbeddings
-    sparse: SparseEmbeddings
-    bgeM3: BGEM3Embeddings
-
-
-ParsedEmbedResponseVariant = (
-    ParsedEmbedResponseDense
-    | ParsedEmbedResponseSparse
-    | ParsedEmbedResponseBGEM3
-    | ParsedEmbedResponseDenseSparse
-    | ParsedEmbedResponseDenseBGEM3
-    | ParsedEmbedResponseSparseBGEM3
-    | ParsedEmbedResponseDenseSparseBGEM3
-)
+    dense: DenseEmbeddings | None = None
+    sparse: SparseEmbeddings | None = None
+    bgeM3: BGEM3Embeddings | None = None
 
 
 @dataclass(slots=True)
@@ -505,60 +349,12 @@ class BGEM3EmbeddingOne:
 
 
 @dataclass(slots=True)
-class ParsedEmbedOneCommon(_PrettyTimingsMixin):
+class ParsedEmbedOne(_PrettyTimingsMixin):
     server_timings: dict[str, float] | None
     client_timings: dict[str, float]
-
-
-@dataclass(slots=True, kw_only=True)
-class ParsedEmbedOneDense(ParsedEmbedOneCommon):
-    dense: DenseEmbeddingVector
-
-
-@dataclass(slots=True, kw_only=True)
-class ParsedEmbedOneSparse(ParsedEmbedOneCommon):
-    sparse: SparseEmbeddingsOne
-
-
-@dataclass(slots=True, kw_only=True)
-class ParsedEmbedOneBGEM3(ParsedEmbedOneCommon):
-    bgeM3: BGEM3EmbeddingOne
-
-
-@dataclass(slots=True, kw_only=True)
-class ParsedEmbedOneDenseSparse(ParsedEmbedOneCommon):
-    dense: DenseEmbeddingVector
-    sparse: SparseEmbeddingsOne
-
-
-@dataclass(slots=True, kw_only=True)
-class ParsedEmbedOneDenseBGEM3(ParsedEmbedOneCommon):
-    dense: DenseEmbeddingVector
-    bgeM3: BGEM3EmbeddingOne
-
-
-@dataclass(slots=True, kw_only=True)
-class ParsedEmbedOneSparseBGEM3(ParsedEmbedOneCommon):
-    sparse: SparseEmbeddingsOne
-    bgeM3: BGEM3EmbeddingOne
-
-
-@dataclass(slots=True, kw_only=True)
-class ParsedEmbedOneDenseSparseBGEM3(ParsedEmbedOneCommon):
-    dense: DenseEmbeddingVector
-    sparse: SparseEmbeddingsOne
-    bgeM3: BGEM3EmbeddingOne
-
-
-ParsedEmbedOneVariant = (
-    ParsedEmbedOneDense
-    | ParsedEmbedOneSparse
-    | ParsedEmbedOneBGEM3
-    | ParsedEmbedOneDenseSparse
-    | ParsedEmbedOneDenseBGEM3
-    | ParsedEmbedOneSparseBGEM3
-    | ParsedEmbedOneDenseSparseBGEM3
-)
+    dense: DenseEmbeddingVector | None = None
+    sparse: SparseEmbeddingsOne | None = None
+    bgeM3: BGEM3EmbeddingOne | None = None
 
 
 @dataclass(slots=True)

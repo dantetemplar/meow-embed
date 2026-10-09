@@ -12,9 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from meow_embed import EmbedCache, MeowEmbedClient
 from meow_embed.types import (
     EmbedRequestPayload,
-    ParsedEmbedOneDenseSparse,
-    ParsedEmbedResponseBGEM3,
-    ParsedEmbedResponseDenseSparse,
+    ParsedEmbedOne,
+    ParsedEmbedResponse,
 )
 
 
@@ -57,9 +56,10 @@ async def test_client_models_and_embed_live_server() -> None:
                 "sparse_model_id": sparse_model_id,
             }
         )
-        assert isinstance(result, ParsedEmbedResponseDenseSparse)
+        assert isinstance(result, ParsedEmbedResponse)
 
         assert result.texts_count == 2
+        assert result.bgeM3 is None
         assert result.dense is not None
         assert result.dense.model_id == dense_model_id
         assert result.dense.vectors.shape[0] == 2
@@ -98,7 +98,10 @@ async def test_client_aembed_one_live_server() -> None:
                 "sparse_model_id": sparse_model_id,
             }
         )
-        assert isinstance(one, ParsedEmbedOneDenseSparse)
+        assert isinstance(one, ParsedEmbedOne)
+        assert one.dense is not None
+        assert one.sparse is not None
+        assert one.bgeM3 is None
         assert one.dense.vector.ndim == 1
         assert one.sparse.item.indices.size == one.sparse.item.values.size
         _assert_embed_timings_present(
@@ -129,20 +132,24 @@ async def test_client_embed_cache_hit_skips_remote(
             meow = MeowEmbedClient(aclient=httpx_aclient, cache=cache)
 
             first = await meow.aembed(payload)
-            assert isinstance(first, ParsedEmbedResponseDenseSparse)
+            assert isinstance(first, ParsedEmbedResponse)
 
             async def _fail_if_remote_called(payload_arg: object) -> object:
                 raise AssertionError(
                     f"Expected cache hit, but remote was called with: {payload_arg}"
                 )
 
-            monkeypatch.setattr(meow, "_embed_remote", _fail_if_remote_called)
+            monkeypatch.setattr(meow, "_aembed_remote", _fail_if_remote_called)
             second = await meow.aembed(payload)
-            assert isinstance(second, ParsedEmbedResponseDenseSparse)
+            assert isinstance(second, ParsedEmbedResponse)
 
             assert second.texts_count == first.texts_count
+            assert first.dense is not None
+            assert first.sparse is not None
+            assert first.bgeM3 is None
             assert second.dense is not None
             assert second.sparse is not None
+            assert second.bgeM3 is None
             assert second.dense.vectors.shape == first.dense.vectors.shape
             assert np.array_equal(first.dense.vectors, second.dense.vectors)
             assert len(second.sparse.items) == len(first.sparse.items)
@@ -255,8 +262,10 @@ async def test_client_embed_bge_m3_live_server() -> None:
                 "bge_model_id": bge_model_id,
             }
         )
-        assert isinstance(parsed, ParsedEmbedResponseBGEM3)
+        assert isinstance(parsed, ParsedEmbedResponse)
         assert parsed.texts_count == 2
+        assert parsed.dense is None
+        assert parsed.sparse is None
         assert parsed.bgeM3 is not None
         assert parsed.bgeM3.model_id == bge_model_id
         assert parsed.bgeM3.dense.vectors.shape[0] == 2
@@ -286,16 +295,22 @@ async def test_client_embed_bge_m3_cache_hit_skips_remote(
                 pytest.skip(f"{bge_model_id} is not loaded on server")
 
             first = await meow.aembed(payload)
-            assert isinstance(first, ParsedEmbedResponseBGEM3)
+            assert isinstance(first, ParsedEmbedResponse)
 
             async def _fail_if_remote_called(payload_arg: object) -> object:
                 raise AssertionError(
                     f"Expected cache hit, but remote was called with: {payload_arg}"
                 )
 
-            monkeypatch.setattr(meow, "_embed_remote", _fail_if_remote_called)
+            monkeypatch.setattr(meow, "_aembed_remote", _fail_if_remote_called)
             second = await meow.aembed(payload)
-            assert isinstance(second, ParsedEmbedResponseBGEM3)
+            assert isinstance(second, ParsedEmbedResponse)
+            assert first.bgeM3 is not None
+            assert second.bgeM3 is not None
+            assert first.dense is None
+            assert first.sparse is None
+            assert second.dense is None
+            assert second.sparse is None
             assert np.array_equal(first.bgeM3.dense.vectors, second.bgeM3.dense.vectors)
             assert len(first.bgeM3.sparse.items) == len(second.bgeM3.sparse.items)
             for first_item, second_item in zip(
@@ -348,9 +363,10 @@ async def test_client_models_and_embed_sync_live_server() -> None:
                     "sparse_model_id": sparse_model_id,
                 }
             )
-            assert isinstance(result, ParsedEmbedResponseDenseSparse)
+            assert isinstance(result, ParsedEmbedResponse)
 
             assert result.texts_count == 2
+            assert result.bgeM3 is None
             assert result.dense is not None
             assert result.dense.model_id == dense_model_id
             assert result.dense.vectors.shape[0] == 2
@@ -395,21 +411,25 @@ async def test_client_embed_sync_cache_hit_skips_remote(
                 )
 
                 first = meow.embed(payload)
-                assert isinstance(first, ParsedEmbedResponseDenseSparse)
+                assert isinstance(first, ParsedEmbedResponse)
 
                 def _fail_if_remote_called(payload_arg: object) -> object:
                     raise AssertionError(
                         f"Expected cache hit, but remote was called with: {payload_arg}"
                     )
 
-                    monkeypatch.setattr(meow, "_embed_remote", _fail_if_remote_called)
+                monkeypatch.setattr(meow, "_embed_remote", _fail_if_remote_called)
 
                 second = meow.embed(payload)
-                assert isinstance(second, ParsedEmbedResponseDenseSparse)
+                assert isinstance(second, ParsedEmbedResponse)
 
                 assert second.texts_count == first.texts_count
+                assert first.dense is not None
+                assert first.sparse is not None
+                assert first.bgeM3 is None
                 assert second.dense is not None
                 assert second.sparse is not None
+                assert second.bgeM3 is None
                 assert second.dense.vectors.shape == first.dense.vectors.shape
                 assert np.array_equal(first.dense.vectors, second.dense.vectors)
                 assert len(second.sparse.items) == len(first.sparse.items)
@@ -475,8 +495,10 @@ async def test_client_embed_bge_m3_sync_live_server() -> None:
                     "bge_model_id": bge_model_id,
                 }
             )
-            assert isinstance(parsed, ParsedEmbedResponseBGEM3)
+            assert isinstance(parsed, ParsedEmbedResponse)
             assert parsed.texts_count == 2
+            assert parsed.dense is None
+            assert parsed.sparse is None
             assert parsed.bgeM3 is not None
             assert parsed.bgeM3.model_id == bge_model_id
             assert parsed.bgeM3.dense.vectors.shape[0] == 2
@@ -513,17 +535,23 @@ async def test_client_embed_bge_m3_sync_cache_hit_skips_remote(
                     pytest.skip(f"{bge_model_id} is not loaded on server")
 
                 first = meow.embed(payload)
-                assert isinstance(first, ParsedEmbedResponseBGEM3)
+                assert isinstance(first, ParsedEmbedResponse)
 
                 def _fail_if_remote_called(payload_arg: object) -> object:
                     raise AssertionError(
                         f"Expected cache hit, but remote was called with: {payload_arg}"
                     )
 
-                    monkeypatch.setattr(meow, "_embed_remote", _fail_if_remote_called)
+                monkeypatch.setattr(meow, "_embed_remote", _fail_if_remote_called)
 
                 second = meow.embed(payload)
-                assert isinstance(second, ParsedEmbedResponseBGEM3)
+                assert isinstance(second, ParsedEmbedResponse)
+                assert first.bgeM3 is not None
+                assert second.bgeM3 is not None
+                assert first.dense is None
+                assert first.sparse is None
+                assert second.dense is None
+                assert second.sparse is None
                 assert np.array_equal(
                     first.bgeM3.dense.vectors, second.bgeM3.dense.vectors
                 )
