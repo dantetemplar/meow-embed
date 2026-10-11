@@ -4,6 +4,7 @@ import gzip
 import inspect
 import json
 import logging
+import threading
 import time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
@@ -662,6 +663,9 @@ def build_app(config: ModelConfig) -> FastAPI:
         app.state.reranker_models = {}
         app.state.cross_encoder_models = {}
         app.state.bge_m3_models = {}
+        # FastAPI runs sync routes in a threadpool. Concurrent CUDA encode on the
+        # same model fragments/leaks allocator memory; serialize all inference.
+        app.state.inference_lock = threading.Lock()
 
         startup_started_at = time.monotonic()
         logger.info("Loading %d model(s)...", len(config.models))
@@ -811,6 +815,7 @@ def build_app(config: ModelConfig) -> FastAPI:
             )
 
         payload: EmbedResponse = EmbedResponse(texts_count=len(embed_request.texts))
+        inference_lock: threading.Lock = app.state.inference_lock
 
         if embed_request.dense_model_id is not None:
             dense_model: SentenceTransformer | None = app.state.dense_models.get(
@@ -823,7 +828,8 @@ def build_app(config: ModelConfig) -> FastAPI:
                 )
             timing_context.get().route_dense_embed_start = time.monotonic()
             try:
-                dense_vectors = encode_dense_inputs(dense_model, embed_request)
+                with inference_lock:
+                    dense_vectors = encode_dense_inputs(dense_model, embed_request)
             except (ValueError, OSError, FFmpegError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
             timing_context.get().route_dense_embed_end = time.monotonic()
@@ -853,36 +859,38 @@ def build_app(config: ModelConfig) -> FastAPI:
                 item for item in embed_request.texts if isinstance(item, str)
             ]
             timing_context.get().route_sparse_embed_start = time.monotonic()
-            if embed_request.sparse_task == "query":
-                sparse_vectors = sparse_model.encode_query(
-                    text_inputs,
-                    max_active_dims=embed_request.sparse_max_active_dims,
-                    convert_to_tensor=True,
-                )
-            elif embed_request.sparse_task == "document":
-                sparse_vectors = sparse_model.encode_document(
-                    text_inputs,
-                    max_active_dims=embed_request.sparse_max_active_dims,
-                    convert_to_tensor=True,
-                )
-            else:
-                sparse_vectors = sparse_model.encode(
-                    text_inputs,
-                    max_active_dims=embed_request.sparse_max_active_dims,
-                    convert_to_tensor=True,
-                )
-            timing_context.get().route_sparse_embed_end = time.monotonic()
-            if embed_request.sparse_pruning_ratio:
-                timing_context.get().route_sparse_prune_start = time.monotonic()
-                sparse_vectors = prune_sparse_embedding(
-                    sparse_vectors,
-                    pruning_ratio=embed_request.sparse_pruning_ratio,
-                )
-                timing_context.get().route_sparse_prune_end = time.monotonic()
-            timing_context.get().route_sparse_payload_start = time.monotonic()
+            with inference_lock:
+                if embed_request.sparse_task == "query":
+                    sparse_vectors = sparse_model.encode_query(
+                        text_inputs,
+                        max_active_dims=embed_request.sparse_max_active_dims,
+                        convert_to_tensor=True,
+                    )
+                elif embed_request.sparse_task == "document":
+                    sparse_vectors = sparse_model.encode_document(
+                        text_inputs,
+                        max_active_dims=embed_request.sparse_max_active_dims,
+                        convert_to_tensor=True,
+                    )
+                else:
+                    sparse_vectors = sparse_model.encode(
+                        text_inputs,
+                        max_active_dims=embed_request.sparse_max_active_dims,
+                        convert_to_tensor=True,
+                    )
+                timing_context.get().route_sparse_embed_end = time.monotonic()
+                if embed_request.sparse_pruning_ratio:
+                    timing_context.get().route_sparse_prune_start = time.monotonic()
+                    sparse_vectors = prune_sparse_embedding(
+                        sparse_vectors,
+                        pruning_ratio=embed_request.sparse_pruning_ratio,
+                    )
+                    timing_context.get().route_sparse_prune_end = time.monotonic()
+                timing_context.get().route_sparse_payload_start = time.monotonic()
+                sparse_items = serialize_sparse_embeddings(sparse_vectors)
             payload.sparse = EmbedResponse.Sparse(
                 model_id=embed_request.sparse_model_id,
-                items=serialize_sparse_embeddings(sparse_vectors),
+                items=sparse_items,
                 encoding="base64",
             )
             timing_context.get().route_sparse_payload_end = time.monotonic()
@@ -897,24 +905,25 @@ def build_app(config: ModelConfig) -> FastAPI:
                     detail=f"BGE model not loaded: {embed_request.bge_model_id}",
                 )
             timing_context.get().route_bge_embed_start = time.monotonic()
-            bge_vectors = bge_model.encode(
-                [item for item in embed_request.texts if isinstance(item, str)],
-                return_dense=True,
-                return_sparse=True,
-                return_colbert_vecs=True,
-            )
-            timing_context.get().route_bge_embed_end = time.monotonic()
+            with inference_lock:
+                bge_vectors = bge_model.encode(
+                    [item for item in embed_request.texts if isinstance(item, str)],
+                    return_dense=True,
+                    return_sparse=True,
+                    return_colbert_vecs=True,
+                )
+                timing_context.get().route_bge_embed_end = time.monotonic()
 
-            dense_vectors = np.asarray(bge_vectors["dense_vecs"], dtype=np.float32)
-            if dense_vectors.ndim == 1:
-                dense_vectors = np.expand_dims(dense_vectors, axis=0)
-            sparse_items = serialize_bge_lexical_weights(
-                cast(list[dict[str, float]], bge_vectors["lexical_weights"]),
-                dim=int(bge_sparse_dimensions(bge_model) or 0),
-            )
-            colbert_items = serialize_bge_colbert_embeddings(
-                bge_vectors["colbert_vecs"]
-            )
+                dense_vectors = np.asarray(bge_vectors["dense_vecs"], dtype=np.float32)
+                if dense_vectors.ndim == 1:
+                    dense_vectors = np.expand_dims(dense_vectors, axis=0)
+                sparse_items = serialize_bge_lexical_weights(
+                    cast(list[dict[str, float]], bge_vectors["lexical_weights"]),
+                    dim=int(bge_sparse_dimensions(bge_model) or 0),
+                )
+                colbert_items = serialize_bge_colbert_embeddings(
+                    bge_vectors["colbert_vecs"]
+                )
 
             timing_context.get().route_bge_payload_start = time.monotonic()
             payload.bgeM3 = EmbedResponse.BGEM3(
@@ -993,13 +1002,14 @@ def build_app(config: ModelConfig) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         pairs = [[query, doc] for query in queries for doc in rerank_request.docs]
-        raw_scores = rerank_scores(
-            reranker_model,
-            pairs,
-            activation_fn=rerank_request.activation_fn,
-            prompt=rerank_request.prompt,
-            prompt_name=rerank_request.prompt_name,
-        )
+        with app.state.inference_lock:
+            raw_scores = rerank_scores(
+                reranker_model,
+                pairs,
+                activation_fn=rerank_request.activation_fn,
+                prompt=rerank_request.prompt,
+                prompt_name=rerank_request.prompt_name,
+            )
         scores_array = np.asarray(raw_scores, dtype=np.float32).reshape(
             len(queries), len(rerank_request.docs)
         )

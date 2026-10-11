@@ -3,6 +3,9 @@ from __future__ import annotations
 import base64
 import gzip
 import json
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 from pathlib import Path
 from typing import Any, assert_type, cast
@@ -243,6 +246,47 @@ def test_bad_image_returns_client_error(monkeypatch: pytest.MonkeyPatch) -> None
         )
         assert response.status_code == 400
         assert response.json()["detail"] == "Invalid image media."
+
+
+def test_embed_serializes_concurrent_inference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sync FastAPI routes run in a threadpool; CUDA needs exclusive access."""
+
+    class SlowDense(DenseModelStub):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            self.active = 0
+            self.max_active = 0
+            self._guard = threading.Lock()
+
+        def _encode(self, task: str, inputs: list[Any], **kwargs: Any) -> np.ndarray:
+            with self._guard:
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+            try:
+                time.sleep(0.05)
+                return super()._encode(task, inputs, **kwargs)
+            finally:
+                with self._guard:
+                    self.active -= 1
+
+    monkeypatch.setattr(server, "SentenceTransformer", SlowDense)
+    app = server.build_app(
+        server.ModelConfig([server.ModelInstanceConfig("dense", "d", {})])
+    )
+    with TestClient(app) as client:
+        model = cast(SlowDense, app.state.dense_models["d"])
+
+        def hit(_: int) -> int:
+            response = client.post("/embed", json={"dense_model_id": "d", "texts": ["1"]})
+            assert response.status_code == 200, response.text
+            return response.status_code
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            futures = [pool.submit(hit, i) for i in range(8)]
+            assert [f.result() for f in as_completed(futures)] == [200] * 8
+        assert model.max_active == 1
 
 
 def transport_handler(request: httpx.Request) -> httpx.Response:
