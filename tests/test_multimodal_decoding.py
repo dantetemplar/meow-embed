@@ -35,7 +35,9 @@ def test_real_audio_and_video_decoding() -> None:
             container.mux(packet)
 
     class Model:
-        def encode(self, inputs: list[Any], **kwargs: Any) -> np.ndarray:
+        def encode(
+            self, inputs: list[Any], batch_size: int = 32, **kwargs: Any
+        ) -> np.ndarray:
             assert len(inputs) == 1
             sound = inputs[0]["audio"][0]
             assert sound["sampling_rate"] == 16000

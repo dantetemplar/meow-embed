@@ -59,7 +59,9 @@ class DenseModelStub:
                     }
         return np.asarray(rows, dtype=np.float32)
 
-    def encode(self, inputs: list[Any], **kwargs: Any) -> np.ndarray:
+    def encode(
+        self, inputs: list[Any], batch_size: int = 32, **kwargs: Any
+    ) -> np.ndarray:
         return self._encode("encode", inputs, **kwargs)
 
     def encode_query(self, inputs: list[Any], **kwargs: Any) -> np.ndarray:

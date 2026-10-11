@@ -30,6 +30,12 @@ from sentence_transformers import CrossEncoder, SentenceTransformer
 from sentence_transformers.sparse_encoder import SparseEncoder
 
 from meow_embed._metadata import __description__, __version__
+from meow_embed.cancellation import (
+    CancelOnDisconnectMiddleware,
+    check_cancelled,
+    inference_batches,
+    inference_lock,
+)
 from meow_embed.media import MEDIA_MODALITIES, validate_multimodal_input
 
 logger = logging.getLogger("uvicorn.error")
@@ -322,8 +328,9 @@ def _ensure_xlm_roberta_create_position_ids_compat() -> None:
 
 
 def default_reranker_batch_size(model: Any) -> int | None:
-    # FlagReranker / CrossEncoder store inference batch size on the instance (__init__);
-    # compute_score / predict only take sentence_pairs and **kwargs.
+    if isinstance(model, CrossEncoder):
+        default = inspect.signature(model.predict).parameters["batch_size"].default
+        return default if isinstance(default, int) else None
     batch_size = getattr(model, "batch_size", None)
     return batch_size if isinstance(batch_size, int) else None
 
@@ -534,6 +541,7 @@ def encode_dense_inputs(
     with TemporaryDirectory(prefix="meow-embed-") as directory:
         groups: dict[tuple[str, ...], list[tuple[int, Any]]] = {}
         for index, item in enumerate(request.texts):
+            check_cancelled()
             if isinstance(item, str):
                 groups.setdefault(("text",), []).append((index, item))
                 continue
@@ -592,21 +600,25 @@ def encode_dense_inputs(
             None: model.encode,
         }[request.dense_task]
         rows: list[Any] = [None] * len(request.texts)
+        batch_size = default_encode_batch_size(model)
         for group in groups.values():
-            inputs = [item for _, item in group]
-            vectors = np.asarray(
-                encode(
-                    inputs,
-                    truncate_dim=request.dense_truncate_dim,
-                    prompt=request.dense_prompt if isinstance(inputs[0], str) else "",
-                    convert_to_numpy=True,
-                ),
-                dtype=np.float32,
-            )
-            if vectors.ndim == 1:
-                vectors = vectors[None, :]
-            for (index, _), vector in zip(group, vectors, strict=True):
-                rows[index] = vector
+            for batch in inference_batches(group, batch_size):
+                inputs = [item for _, item in batch]
+                vectors = np.asarray(
+                    encode(
+                        inputs,
+                        batch_size=batch_size,
+                        truncate_dim=request.dense_truncate_dim,
+                        prompt=request.dense_prompt if isinstance(inputs[0], str) else "",
+                        convert_to_numpy=True,
+                    ),
+                    dtype=np.float32,
+                )
+                check_cancelled()
+                if vectors.ndim == 1:
+                    vectors = vectors[None, :]
+                for (index, _), vector in zip(batch, vectors, strict=True):
+                    rows[index] = vector
         return np.stack(rows)
 
 
@@ -720,6 +732,7 @@ def build_app(config: ModelConfig) -> FastAPI:
         lifespan=lifespan,
     )
     app.router.route_class = CustomRoute
+    app.add_middleware(CancelOnDisconnectMiddleware)
 
     @app.get("/", include_in_schema=False)
     def root_redirect() -> RedirectResponse:
@@ -815,7 +828,8 @@ def build_app(config: ModelConfig) -> FastAPI:
             )
 
         payload: EmbedResponse = EmbedResponse(texts_count=len(embed_request.texts))
-        inference_lock: threading.Lock = app.state.inference_lock
+        lock: threading.Lock = app.state.inference_lock
+        check_cancelled()
 
         if embed_request.dense_model_id is not None:
             dense_model: SentenceTransformer | None = app.state.dense_models.get(
@@ -828,7 +842,7 @@ def build_app(config: ModelConfig) -> FastAPI:
                 )
             timing_context.get().route_dense_embed_start = time.monotonic()
             try:
-                with inference_lock:
+                with inference_lock(lock):
                     dense_vectors = encode_dense_inputs(dense_model, embed_request)
             except (ValueError, OSError, FFmpegError) as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -859,35 +873,32 @@ def build_app(config: ModelConfig) -> FastAPI:
                 item for item in embed_request.texts if isinstance(item, str)
             ]
             timing_context.get().route_sparse_embed_start = time.monotonic()
-            with inference_lock:
-                if embed_request.sparse_task == "query":
-                    sparse_vectors = sparse_model.encode_query(
-                        text_inputs,
+            sparse_items: list[EmbedResponse.Sparse.Item] = []
+            encode_sparse = {
+                "query": sparse_model.encode_query,
+                "document": sparse_model.encode_document,
+                None: sparse_model.encode,
+            }[embed_request.sparse_task]
+            batch_size = default_encode_batch_size(sparse_model)
+            with inference_lock(lock):
+                for batch in inference_batches(text_inputs, batch_size):
+                    sparse_vectors = encode_sparse(
+                        batch,
+                        batch_size=batch_size,
                         max_active_dims=embed_request.sparse_max_active_dims,
                         convert_to_tensor=True,
                     )
-                elif embed_request.sparse_task == "document":
-                    sparse_vectors = sparse_model.encode_document(
-                        text_inputs,
-                        max_active_dims=embed_request.sparse_max_active_dims,
-                        convert_to_tensor=True,
-                    )
-                else:
-                    sparse_vectors = sparse_model.encode(
-                        text_inputs,
-                        max_active_dims=embed_request.sparse_max_active_dims,
-                        convert_to_tensor=True,
-                    )
-                timing_context.get().route_sparse_embed_end = time.monotonic()
-                if embed_request.sparse_pruning_ratio:
-                    timing_context.get().route_sparse_prune_start = time.monotonic()
-                    sparse_vectors = prune_sparse_embedding(
-                        sparse_vectors,
-                        pruning_ratio=embed_request.sparse_pruning_ratio,
-                    )
-                    timing_context.get().route_sparse_prune_end = time.monotonic()
-                timing_context.get().route_sparse_payload_start = time.monotonic()
-                sparse_items = serialize_sparse_embeddings(sparse_vectors)
+                    check_cancelled()
+                    timing_context.get().route_sparse_embed_end = time.monotonic()
+                    if embed_request.sparse_pruning_ratio:
+                        timing_context.get().route_sparse_prune_start = time.monotonic()
+                        sparse_vectors = prune_sparse_embedding(
+                            sparse_vectors,
+                            pruning_ratio=embed_request.sparse_pruning_ratio,
+                        )
+                        timing_context.get().route_sparse_prune_end = time.monotonic()
+                    timing_context.get().route_sparse_payload_start = time.monotonic()
+                    sparse_items.extend(serialize_sparse_embeddings(sparse_vectors))
             payload.sparse = EmbedResponse.Sparse(
                 model_id=embed_request.sparse_model_id,
                 items=sparse_items,
@@ -905,25 +916,39 @@ def build_app(config: ModelConfig) -> FastAPI:
                     detail=f"BGE model not loaded: {embed_request.bge_model_id}",
                 )
             timing_context.get().route_bge_embed_start = time.monotonic()
-            with inference_lock:
-                bge_vectors = bge_model.encode(
-                    [item for item in embed_request.texts if isinstance(item, str)],
-                    return_dense=True,
-                    return_sparse=True,
-                    return_colbert_vecs=True,
-                )
-                timing_context.get().route_bge_embed_end = time.monotonic()
+            text_inputs = [
+                item for item in embed_request.texts if isinstance(item, str)
+            ]
+            dense_batches: list[np.ndarray] = []
+            sparse_items = []
+            colbert_items: list[EmbedResponse.BGEM3.ColbertItem] = []
+            batch_size = default_bge_batch_size(bge_model)
+            with inference_lock(lock):
+                for batch in inference_batches(text_inputs, batch_size):
+                    bge_vectors = bge_model.encode(
+                        batch,
+                        batch_size=batch_size,
+                        return_dense=True,
+                        return_sparse=True,
+                        return_colbert_vecs=True,
+                    )
+                    check_cancelled()
+                    timing_context.get().route_bge_embed_end = time.monotonic()
 
-                dense_vectors = np.asarray(bge_vectors["dense_vecs"], dtype=np.float32)
-                if dense_vectors.ndim == 1:
-                    dense_vectors = np.expand_dims(dense_vectors, axis=0)
-                sparse_items = serialize_bge_lexical_weights(
-                    cast(list[dict[str, float]], bge_vectors["lexical_weights"]),
-                    dim=int(bge_sparse_dimensions(bge_model) or 0),
-                )
-                colbert_items = serialize_bge_colbert_embeddings(
-                    bge_vectors["colbert_vecs"]
-                )
+                    dense_vectors = np.asarray(bge_vectors["dense_vecs"], dtype=np.float32)
+                    if dense_vectors.ndim == 1:
+                        dense_vectors = np.expand_dims(dense_vectors, axis=0)
+                    dense_batches.append(dense_vectors)
+                    sparse_items.extend(
+                        serialize_bge_lexical_weights(
+                            cast(list[dict[str, float]], bge_vectors["lexical_weights"]),
+                            dim=int(bge_sparse_dimensions(bge_model) or 0),
+                        )
+                    )
+                    colbert_items.extend(
+                        serialize_bge_colbert_embeddings(bge_vectors["colbert_vecs"])
+                    )
+            dense_vectors = np.concatenate(dense_batches, axis=0)
 
             timing_context.get().route_bge_payload_start = time.monotonic()
             payload.bgeM3 = EmbedResponse.BGEM3(
@@ -1002,15 +1027,21 @@ def build_app(config: ModelConfig) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         pairs = [[query, doc] for query in queries for doc in rerank_request.docs]
-        with app.state.inference_lock:
-            raw_scores = rerank_scores(
-                reranker_model,
-                pairs,
-                activation_fn=rerank_request.activation_fn,
-                prompt=rerank_request.prompt,
-                prompt_name=rerank_request.prompt_name,
-            )
-        scores_array = np.asarray(raw_scores, dtype=np.float32).reshape(
+        score_batches: list[np.ndarray] = []
+        with inference_lock(app.state.inference_lock):
+            for batch in inference_batches(
+                pairs, default_reranker_batch_size(reranker_model)
+            ):
+                raw_scores = rerank_scores(
+                    reranker_model,
+                    batch,
+                    activation_fn=rerank_request.activation_fn,
+                    prompt=rerank_request.prompt,
+                    prompt_name=rerank_request.prompt_name,
+                )
+                check_cancelled()
+                score_batches.append(np.asarray(raw_scores, dtype=np.float32).reshape(-1))
+        scores_array = np.concatenate(score_batches).reshape(
             len(queries), len(rerank_request.docs)
         )
         scores = [[float(value) for value in row] for row in scores_array.tolist()]
