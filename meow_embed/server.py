@@ -533,6 +533,12 @@ def serialize_bge_colbert_embeddings(
     return items
 
 
+def length_sorted_texts(texts: list[str]) -> tuple[list[str], list[int]]:
+    """Group similar lengths before microbatching and retain the inverse permutation."""
+    order = sorted(range(len(texts)), key=lambda index: len(texts[index]))
+    return [texts[index] for index in order], np.argsort(order).tolist()
+
+
 def encode_dense_inputs(
     model: SentenceTransformer,
     request: EmbedRequest,
@@ -601,7 +607,13 @@ def encode_dense_inputs(
         }[request.dense_task]
         rows: list[Any] = [None] * len(request.texts)
         batch_size = default_encode_batch_size(model)
-        for group in groups.values():
+        for key, group in groups.items():
+            if key in (("text",), ("dict", "text")):
+                group.sort(
+                    key=lambda entry: len(
+                        entry[1] if isinstance(entry[1], str) else entry[1]["text"]
+                    )
+                )
             for batch in inference_batches(group, batch_size):
                 inputs = [item for _, item in batch]
                 vectors = np.asarray(
@@ -869,9 +881,9 @@ def build_app(config: ModelConfig) -> FastAPI:
                     status_code=400,
                     detail=f"Sparse model not loaded: {embed_request.sparse_model_id}",
                 )
-            text_inputs = [
-                item for item in embed_request.texts if isinstance(item, str)
-            ]
+            text_inputs, original_order = length_sorted_texts(
+                [item for item in embed_request.texts if isinstance(item, str)]
+            )
             timing_context.get().route_sparse_embed_start = time.monotonic()
             sparse_items: list[EmbedResponse.Sparse.Item] = []
             encode_sparse = {
@@ -901,7 +913,7 @@ def build_app(config: ModelConfig) -> FastAPI:
                     sparse_items.extend(serialize_sparse_embeddings(sparse_vectors))
             payload.sparse = EmbedResponse.Sparse(
                 model_id=embed_request.sparse_model_id,
-                items=sparse_items,
+                items=[sparse_items[index] for index in original_order],
                 encoding="base64",
             )
             timing_context.get().route_sparse_payload_end = time.monotonic()
@@ -916,9 +928,9 @@ def build_app(config: ModelConfig) -> FastAPI:
                     detail=f"BGE model not loaded: {embed_request.bge_model_id}",
                 )
             timing_context.get().route_bge_embed_start = time.monotonic()
-            text_inputs = [
-                item for item in embed_request.texts if isinstance(item, str)
-            ]
+            text_inputs, original_order = length_sorted_texts(
+                [item for item in embed_request.texts if isinstance(item, str)]
+            )
             dense_batches: list[np.ndarray] = []
             sparse_items = []
             colbert_items: list[EmbedResponse.BGEM3.ColbertItem] = []
@@ -948,7 +960,7 @@ def build_app(config: ModelConfig) -> FastAPI:
                     colbert_items.extend(
                         serialize_bge_colbert_embeddings(bge_vectors["colbert_vecs"])
                     )
-            dense_vectors = np.concatenate(dense_batches, axis=0)
+            dense_vectors = np.concatenate(dense_batches, axis=0)[original_order]
 
             timing_context.get().route_bge_payload_start = time.monotonic()
             payload.bgeM3 = EmbedResponse.BGEM3(
@@ -962,10 +974,10 @@ def build_app(config: ModelConfig) -> FastAPI:
                 ),
                 sparse=EmbedResponse.Sparse(
                     model_id=embed_request.bge_model_id,
-                    items=sparse_items,
+                    items=[sparse_items[index] for index in original_order],
                     encoding="base64",
                 ),
-                colbert=colbert_items,
+                colbert=[colbert_items[index] for index in original_order],
             )
             timing_context.get().route_bge_payload_end = time.monotonic()
         return payload

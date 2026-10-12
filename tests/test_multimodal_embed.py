@@ -195,6 +195,50 @@ def test_server_interleaving_and_batch_order(
         assert all(not path.exists() for path in video_paths + audio_paths)
 
 
+@pytest.mark.parametrize("task", [None, "query", "document"])
+def test_text_groups_sorted_without_reordering_media(
+    task: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(server, "SentenceTransformer", DenseModelStub)
+    monkeypatch.setattr(server, "default_encode_batch_size", lambda model: 2)
+    app = server.build_app(
+        server.ModelConfig([server.ModelInstanceConfig("dense", "d", {})])
+    )
+    texts = [
+        "4444",
+        {"text": "333"},
+        {"text": "666666 <|image|>", "image": media(image_bytes())},
+        "7",
+        {"text": "8"},
+        {"text": "2 <|image|>", "image": media(image_bytes())},
+        "22",
+        {"text": "11"},
+    ]
+    with TestClient(app) as client:
+        response = client.post(
+            "/embed", json={"dense_model_id": "d", "dense_task": task, "texts": texts}
+        )
+        assert response.status_code == 200, response.text
+        model = app.state.dense_models["d"]
+        assert [call[1] for call in model.calls[:4]] == [
+            ["7", "22"],
+            ["4444"],
+            [{"text": "8"}, {"text": "11"}],
+            [{"text": "333"}],
+        ]
+        assert [item["text"] for item in model.calls[4][1]] == [
+            "666666 <|image|>",
+            "2 <|image|>",
+        ]
+        vectors = np.frombuffer(
+            base64.b64decode(response.json()["dense"]["data"]), dtype=np.float32
+        ).reshape(len(texts), 2)
+        np.testing.assert_array_equal(
+            vectors,
+            [[4444, 0], [333, 1], [666666, 1], [7, 0], [8, 1], [2, 1], [22, 0], [11, 1]],
+        )
+
+
 def test_dense_prompt_applies_only_to_text() -> None:
     class PromptModel(DenseModelStub):
         def _encode(self, task: str, inputs: list[Any], **kwargs: Any) -> np.ndarray:

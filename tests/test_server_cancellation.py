@@ -235,15 +235,31 @@ async def test_disconnect_while_waiting_for_lock_skips_inference(
 
 
 @pytest.mark.parametrize("kind", KINDS)
+@pytest.mark.parametrize(
+    "texts",
+    [
+        ["1", "2", "3", "4", "5"],
+        ["4444", "7", "333", "22", "8", "22", "55555"],
+        ["123"],
+    ],
+)
 def test_batched_results_keep_order(
-    kind: ModelKind, monkeypatch: pytest.MonkeyPatch
+    kind: ModelKind, texts: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app = make_app(kind, monkeypatch)
     path, payload = payload_for(kind)
+    is_embedding = kind in ("dense", "sparse", "bgeM3")
+    if is_embedding:
+        payload["texts"] = texts
     with TestClient(app) as client:
         response = client.post(path, json=payload)
         assert response.status_code == 200, response.text
-        assert len(model_for(app, kind).calls) == 3
+        calls = model_for(app, kind).calls
+        assert len(calls) == ((len(texts) + 1) // 2 if is_embedding else 3)
+        if is_embedding:
+            ordered = sorted(texts, key=len)
+            assert calls == [ordered[start : start + 2] for start in range(0, len(texts), 2)]
+        expected = [float(text) for text in texts]
         result = response.json()
         if kind in ("reranker", "crossEncoder"):
             assert result["scores"] == [[1, 2, 3], [1, 2, 3]]
@@ -255,7 +271,7 @@ def test_batched_results_keep_order(
                     base64.b64decode(dense["data"]), dtype=np.float32
                 )
                 np.testing.assert_array_equal(
-                    vectors.reshape(5, 2)[:, 0], [1, 2, 3, 4, 5]
+                    vectors.reshape(len(texts), 2)[:, 0], expected
                 )
             if kind in ("sparse", "bgeM3"):
                 values = [
@@ -264,9 +280,16 @@ def test_batched_results_keep_order(
                     ).item()
                     for item in result["sparse"]["items"]
                 ]
-                assert values == [1, 2, 3, 4, 5]
+                assert values == expected
             if kind == "bgeM3":
-                assert len(result["colbert"]) == 5
+                assert len(result["colbert"]) == len(texts)
+                colbert_values = [
+                    np.frombuffer(
+                        base64.b64decode(item["data"]), dtype=np.float32
+                    ).reshape(item["shape"])[0, 0]
+                    for item in result["colbert"]
+                ]
+                assert colbert_values == expected
 
 
 @pytest.mark.anyio
